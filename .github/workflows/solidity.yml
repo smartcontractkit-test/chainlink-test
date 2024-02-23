@@ -60,8 +60,8 @@ jobs:
           PRE_RELEASE_REGEX: '^contracts/v[0-9]+\.[0-9]+\.[0-9]+-(.+)$'
 
   prepublish-test:
-    needs: [changes]
-    if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+    needs: [changes, initialize]
+    if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
     name: Prepublish Test ${{ fromJSON('["(skipped)", ""]')[needs.changes.outputs.changes == 'true'] }}
     runs-on: ubuntu-latest
     steps:
@@ -83,8 +83,8 @@ jobs:
         continue-on-error: true
 
   native-compile:
-    needs: [changes]
-    if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+    needs: [changes, initialize]
+    if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
     name: Native Compilation ${{ fromJSON('["(skipped)", ""]')[needs.changes.outputs.changes == 'true'] }}
     runs-on: ubuntu-latest
     steps:
