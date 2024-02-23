@@ -62,7 +62,7 @@ jobs:
   prepublish-test:
     needs: [changes, initialize]
     if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
-    name: Prepublish Test ${{ fromJSON('["(skipped)", ""]')[needs.changes.outputs.changes == 'true'] }}
+    name: Prepublish Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the repo
@@ -85,7 +85,7 @@ jobs:
   native-compile:
     needs: [changes, initialize]
     if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
-    name: Native Compilation ${{ fromJSON('["(skipped)", ""]')[needs.changes.outputs.changes == 'true'] }}
+    name: Native Compilation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the repo
