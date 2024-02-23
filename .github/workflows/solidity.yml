@@ -221,6 +221,8 @@ jobs:
     needs: [initialize, changes, native-compile, lint, prettier, prepublish-test]
     name: Publish Prod NPM
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: needs.initialize.outputs.is-release == 'true'
     steps:
       - name: Checkout the repo
