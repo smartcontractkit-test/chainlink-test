@@ -187,8 +187,9 @@ jobs:
         continue-on-error: true
 
   publish-beta:
-    needs: [initialize, changes, native-compile, lint, prettier, prepublish-test]
     name: Publish Beta NPM
+    environment: publish
+    needs: [initialize, changes, native-compile, lint, prettier, prepublish-test]
     runs-on: ubuntu-latest
     if: needs.initialize.outputs.is-pre-release == 'true'
     steps:
@@ -214,12 +215,13 @@ jobs:
           org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           hostname: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          this-job-name: Publish-Beta
+          this-job-name: Publish Beta NPM
         continue-on-error: true
 
   publish-prod:
-    needs: [initialize, changes, native-compile, lint, prettier, prepublish-test]
     name: Publish Prod NPM
+    environment: publish
+    needs: [initialize, changes, native-compile, lint, prettier, prepublish-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -249,5 +251,5 @@ jobs:
           org-id: ${{ secrets.GRAFANA_INTERNAL_TENANT_ID }}
           basic-auth: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
           hostname: ${{ secrets.GRAFANA_INTERNAL_HOST }}
-          this-job-name: Publish-Prod
+          this-job-name: Publish Prod NPM
         continue-on-error: true
