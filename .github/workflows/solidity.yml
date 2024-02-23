@@ -34,7 +34,7 @@ jobs:
               - 'contracts/src/v0.7/**/*'
 
       - name: Fail if read-only files have changed
-        if: ${{ steps.changes.outputs.old_sol == 'true' }} && github.event_name != 'workflow_dispatch'
+        if: steps.changes.outputs.old_sol == 'false' || (steps.changes.outputs.old_sol == 'true' && github.event_name != 'workflow_dispatch' )
         run: |
           echo "One or more read-only Solidity file(s) has changed."
           for file in ${{ steps.changes.outputs.old_sol_files }}; do
