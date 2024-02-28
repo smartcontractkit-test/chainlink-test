@@ -234,7 +234,7 @@ jobs:
         uses: ./.github/actions/setup-nodejs
 
       - name: Publish to NPM
-        uses: smartcontractkit/.github/actions/ci-publish-npm@feat/ci-publish-npm-0-3-0 # ci-publish-npm@0.2.0
+        uses: smartcontractkit/.github/actions/ci-publish-npm@8503e83c8bab7dcdbb4a39b745129fd97c10cd63 # feat/ci-publish-npm-0-3-0
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
