@@ -49,6 +49,7 @@ jobs:
     outputs:
       is-release: ${{ steps.release-tag-check.outputs.is-release }}
       is-pre-release: ${{ steps.release-tag-check.outputs.is-pre-release }}
+      branch-name: ${{ steps.branch-name-check.outputs.branch-name }}
     steps:
       - uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3.1.0
       - name: Check release tag
@@ -58,6 +59,12 @@ jobs:
           # Match semver git tags with a "contracts-" prefix.
           RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+$'
           PRE_RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+-(.+)$'
+      - name: branch-name-check
+        if: steps.release-tag-check.outputs.is-release == 'true' || steps.release-tag-check.outputs.is-pre-release == 'true'
+        id: branch-name-check
+        # If the push event is for a pre-release or release, we will need the associated branch for the npm publish below
+        run: |
+          echo "branch-name=$(git branch -r --contains contracts-v0.9.0 | cut -d'/' -f2-)" | tee -a "$GITHUB_OUTPUT"
 
   prepublish-test:
     needs: [changes, initialize]
@@ -232,11 +239,6 @@ jobs:
 
       - name: Setup NodeJS
         uses: ./.github/actions/setup-nodejs
-      
-      - name: Get branch name
-        shell: bash
-        run: |
-          echo "GITHUB_BRANCH=$(git branch -r --contains contracts-v0.9.0 | cut -d'/' -f2-)" >> $GITHUB_ENV
 
       - name: Publish to NPM
         uses: smartcontractkit/.github/actions/ci-publish-npm@7b965cf1a0d58d05a9b8a45fffd929cd1ee18393 # feat/ci-publish-npm-0-3-0
@@ -247,7 +249,7 @@ jobs:
           github-release-changelog-path: "contracts/CHANGELOG.md"
           create-github-release: true
           # TODO: Remove --dry-run when ready to publish
-          publish-command: "pnpm publish-prod --dry-run --publish-branch ${GITHUB_BRANCH} --no-git-checks"
+          publish-command: "pnpm publish-prod -- --dry-run --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
           package-json-directory: contracts
 
       - name: Collect Metrics
