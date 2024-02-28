@@ -3,7 +3,6 @@ name: Solidity
 on:
   merge_group:
   push:
-  workflow_dispatch:
 
 defaults:
   run:
@@ -34,7 +33,7 @@ jobs:
               - 'contracts/src/v0.7/**/*'
 
       - name: Fail if read-only files have changed
-        if: steps.changes.outputs.old_sol == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.changes.outputs.old_sol == 'true'
         run: |
           echo "One or more read-only Solidity file(s) has changed."
           for file in ${{ steps.changes.outputs.old_sol_files }}; do
@@ -68,7 +67,7 @@ jobs:
 
   prepublish-test:
     needs: [changes, initialize]
-    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
+    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true'
     name: Prepublish Test
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +90,7 @@ jobs:
 
   native-compile:
     needs: [changes, initialize]
-    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true' || github.event_name == 'workflow_dispatch'
+    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true'
     name: Native Compilation
     runs-on: ubuntu-latest
     steps:
@@ -117,7 +116,7 @@ jobs:
       - name: Verify local solc binaries
         run: ./tools/ci/check_solc_hashes
       - name: Check if Go solidity wrappers are updated
-        if: ${{ needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ needs.changes.outputs.changes == 'true' }}
         run: git diff --minimal --color --exit-code | diff-so-fancy
       - name: Comment on fix instructions
         env:
@@ -147,16 +146,16 @@ jobs:
       - name: Checkout the repo
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Setup NodeJS
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         uses: ./.github/actions/setup-nodejs
       - name: Run pnpm lint
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         run: pnpm lint
       - name: Run solhint
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         run: pnpm solhint
       - name: Collect Metrics
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         id: collect-gha-metrics
         uses: smartcontractkit/push-gha-metrics-action@0281b09807758be1dcc41651e44e62b353808c47 # v2.1.0
         with:
@@ -177,13 +176,13 @@ jobs:
       - name: Checkout the repo
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: Setup NodeJS
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         uses: ./.github/actions/setup-nodejs
       - name: Run prettier check
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         run: pnpm prettier:check
       - name: Collect Metrics
-        if: needs.changes.outputs.changes == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.changes == 'true'
         id: collect-gha-metrics
         uses: smartcontractkit/push-gha-metrics-action@0281b09807758be1dcc41651e44e62b353808c47 # v2.1.0
         with:
@@ -196,7 +195,7 @@ jobs:
   publish-beta:
     name: Publish Beta NPM
     environment: publish
-    needs: [initialize, changes, lint, prettier] # native-compile, prepublish-test
+    needs: [initialize, changes, lint, prettier, native-compile, prepublish-test ]
     runs-on: ubuntu-latest
     if: needs.initialize.outputs.is-pre-release == 'true'
     steps:
@@ -228,17 +227,23 @@ jobs:
   publish-prod:
     name: Publish Prod NPM
     environment: publish
-    needs: [initialize, changes, lint, prettier ] # native-compile, prepublish-test
+    needs: [initialize, changes, lint, prettier,  native-compile, prepublish-test ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # if: needs.initialize.outputs.is-release == 'true'
+    if: needs.initialize.outputs.is-release == 'true'
     steps:
       - name: Checkout the repo
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Setup NodeJS
         uses: ./.github/actions/setup-nodejs
+
+      - name: Debug
+        shell: bash
+        run: |
+          echo "pnpm publish-prod --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
+          echo "GITHUB_REF_NAME=${GITHUB_REF_NAME}"
 
       - name: Publish to NPM
         uses: smartcontractkit/.github/actions/ci-publish-npm@7b965cf1a0d58d05a9b8a45fffd929cd1ee18393 # feat/ci-publish-npm-0-3-0
@@ -248,8 +253,7 @@ jobs:
           github-release-tag-name: ${{ github.ref_name }}
           github-release-changelog-path: "contracts/CHANGELOG.md"
           create-github-release: true
-          # TODO: Remove --dry-run when ready to publish
-          publish-command: "pnpm publish-prod -- --dry-run --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
+          publish-command: "pnpm publish-prod --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
           package-json-directory: contracts
 
       - name: Collect Metrics
