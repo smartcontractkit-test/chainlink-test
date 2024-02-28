@@ -232,6 +232,11 @@ jobs:
 
       - name: Setup NodeJS
         uses: ./.github/actions/setup-nodejs
+      
+      - name: Get branch name
+        shell: bash
+        run: |
+          echo "GITHUB_BRANCH=$(git branch -r --contains ${{ github.ref }} | awk -F'/' '{print $2}')" >> $GITHUB_ENV
 
       - name: Publish to NPM
         uses: smartcontractkit/.github/actions/ci-publish-npm@7b965cf1a0d58d05a9b8a45fffd929cd1ee18393 # feat/ci-publish-npm-0-3-0
@@ -242,7 +247,7 @@ jobs:
           github-release-changelog-path: "contracts/CHANGELOG.md"
           create-github-release: true
           # TODO: Remove --dry-run when ready to publish
-          publish-command: "pnpm publish-prod --dry-run --publish-branch ${GITHUB_REF_NAME} --no-git-checks"
+          publish-command: "pnpm publish-prod --dry-run --publish-branch ${ GITHUB_BRANCH } --format '%(refname:lstrip=3)') --no-git-checks"
           package-json-directory: contracts
 
       - name: Collect Metrics
