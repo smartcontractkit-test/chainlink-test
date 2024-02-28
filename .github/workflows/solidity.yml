@@ -48,7 +48,6 @@ jobs:
     outputs:
       is-release: ${{ steps.release-tag-check.outputs.is-release }}
       is-pre-release: ${{ steps.release-tag-check.outputs.is-pre-release }}
-      branch-name: ${{ steps.branch-name-check.outputs.branch-name }}
     steps:
       - uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3.1.0
       - name: Check release tag
@@ -58,12 +57,6 @@ jobs:
           # Match semver git tags with a "contracts-" prefix.
           RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+$'
           PRE_RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+-(.+)$'
-      - name: branch-name-check
-        if: steps.release-tag-check.outputs.is-pre-release == 'true'
-        id: branch-name-check
-        # If the push event is for a pre-release, we will need the associated branch for the npm publish --publish-branch flag.
-        run: |
-          echo "branch-name=$(git branch -r --contains ${{ github.ref_name }} | cut -d'/' -f2-)" | tee -a "$GITHUB_OUTPUT"
 
   prepublish-test:
     needs: [changes, initialize]
@@ -211,7 +204,7 @@ jobs:
           npm-token: ${{ secrets.NPM_TOKEN }}
           create-github-release: false
           # TODO: Remove --dry-run when ready to publish
-          publish-command: "pnpm publish-beta --dry-run --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
+          publish-command: "pnpm publish-beta --dry-run --no-git-checks"
           package-json-directory: contracts
 
       - name: Collect Metrics
