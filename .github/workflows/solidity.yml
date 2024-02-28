@@ -239,7 +239,7 @@ jobs:
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           github-release-tag-name: ${{ github.ref_name }}
-          github-release-changelog-path: contracts/CHANGELOG.md
+          github-release-changelog-path: "contracts/CHANGELOG.md"
           create-github-release: true
           # TODO: Remove --dry-run when ready to publish
           publish-command: "pnpm publish-prod --dry-run --publish-branch ${GITHUB_REF_NAME} --no-git-checks"
