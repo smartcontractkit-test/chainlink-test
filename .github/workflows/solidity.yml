@@ -200,7 +200,7 @@ jobs:
         uses: ./.github/actions/setup-nodejs
 
       - name: Publish to NPM
-        uses: smartcontractkit/.github/actions/ci-publish-npm@4e934ced130f447eaf325d1d610c440517eb93e9 # ci-publish-npm@0.2.0
+        uses: smartcontractkit/.github/actions/ci-publish-npm@feat/ci-publish-npm-0-3-0 # ci-publish-npm@0.2.0
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
           create-github-release: false
@@ -234,11 +234,12 @@ jobs:
         uses: ./.github/actions/setup-nodejs
 
       - name: Publish to NPM
-        uses: smartcontractkit/.github/actions/ci-publish-npm@4e934ced130f447eaf325d1d610c440517eb93e9 # ci-publish-npm@0.2.0
+        uses: smartcontractkit/.github/actions/ci-publish-npm@feat/ci-publish-npm-0-3-0 # ci-publish-npm@0.2.0
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           github-release-tag-name: ${{ github.ref_name }}
+          github-release-changelog-path: contracts/CHANGELOG.md
           create-github-release: true
           # TODO: Remove --dry-run when ready to publish
           publish-command: "pnpm publish-prod --dry-run --publish-branch ${GITHUB_REF_NAME} --no-git-checks"
