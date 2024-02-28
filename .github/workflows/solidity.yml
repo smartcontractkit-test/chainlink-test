@@ -253,7 +253,7 @@ jobs:
           github-release-tag-name: ${{ github.ref_name }}
           github-release-changelog-path: "contracts/CHANGELOG.md"
           create-github-release: true
-          publish-command: "pnpm publish-prod --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks"
+          publish-command: "echo 'pnpm publish-prod --publish-branch ${{ needs.initialize.outputs.branch-name }} --no-git-checks'"
           package-json-directory: contracts
 
       - name: Collect Metrics
