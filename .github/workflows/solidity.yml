@@ -67,7 +67,7 @@ jobs:
 
   prepublish-test:
     needs: [changes, initialize]
-    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true'
+    if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-pre-release == 'true'
     name: Prepublish Test
     runs-on: ubuntu-latest
     steps:
@@ -90,7 +90,7 @@ jobs:
 
   native-compile:
     needs: [changes, initialize]
-    if: 'false' # needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true'
+    if: needs.changes.outputs.changes == 'true' || needs.initialize.outputs.is-release == 'true' || needs.initialize.outputs.is-pre-release == 'true'
     name: Native Compilation
     runs-on: ubuntu-latest
     steps:
