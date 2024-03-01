@@ -43,7 +43,7 @@ jobs:
 
   tag-check:
     needs: [changes]
-    name: tag-check
+    name: Tag Check
     runs-on: ubuntu-latest
     outputs:
       is-release: ${{ steps.release-tag-check.outputs.is-release }}
@@ -203,6 +203,7 @@ jobs:
         uses: ./.github/actions/setup-nodejs
 
       - name: Version package.json
+        working-directory: contracts
         run: |
           echo "Bumping version to ${{ needs.tag-check.outputs.pre-release-version }}"
           pnpm version ${{ needs.tag-check.outputs.pre-release-version }} --no-git-tag-version --no-commit-hooks --no-git-checks
