@@ -48,17 +48,19 @@ jobs:
     outputs:
       is-release: ${{ steps.release-tag-check.outputs.is-release }}
       is-pre-release: ${{ steps.release-tag-check.outputs.is-pre-release }}
+      release-version: ${{ steps.release-tag-check.outputs.release-version }}
+      pre-release-version: ${{ steps.release-tag-check.outputs.pre-release-version }}
     steps:
       - uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3.1.0
       - name: Check release tag
         id: release-tag-check
-        uses: smartcontractkit/chainlink-github-actions/release/release-tag-check@1a732a3dbcbf327b0da0db209052be14b9b6988b # feat/release-tag-check-versions
+        uses: smartcontractkit/chainlink-github-actions/release/release-tag-check@ae1be257313b71d702be2d2bbe7ff76dc4fae460 # feat/release-tag-check-versions
         env:
           # Match semver git tags with a "contracts-" prefix.
           RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+$'
           PRE_RELEASE_REGEX: '^contracts-v[0-9]+\.[0-9]+\.[0-9]+-(.+)$'
           # Get the version by stripping the "contracts-v" prefix. 
-          PREFIX_TO_STRIP: 'contracts-v'
+          VERSION_PREFIX: 'contracts-v'
 
   prepublish-test:
     needs: [changes, tag-check]
