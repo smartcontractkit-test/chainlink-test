@@ -25,10 +25,12 @@ import (
 
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
 	"github.com/smartcontractkit/chainlink-common/pkg/services/servicetest"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/mailbox/mailboxtest"
 
 	"github.com/smartcontractkit/chainlink/v2/core/auth"
 	"github.com/smartcontractkit/chainlink/v2/core/bridges"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/configtest"
@@ -38,7 +40,6 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
-	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/ethkey"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/validate"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocrcommon"
@@ -67,7 +68,7 @@ func TestRunner(t *testing.T) {
 		require.NoError(t, err)
 		kbid := models.MustSha256HashFromHex(kb.ID())
 		c.OCR.KeyBundleID = &kbid
-		taddress := ethkey.EIP55AddressFromAddress(transmitterAddress)
+		taddress := types.EIP55AddressFromAddress(transmitterAddress)
 		c.OCR.TransmitterAddress = &taddress
 		c.OCR2.DatabaseTimeout = commonconfig.MustNewDuration(time.Second)
 		c.OCR2.ContractTransmitterTransmitTimeout = commonconfig.MustNewDuration(time.Second)
@@ -465,7 +466,7 @@ answer1      [type=median index=0];
 			config.Database(),
 			servicetest.Run(t, mailboxtest.NewMonitor(t)),
 		)
-		_, err = sd.ServicesForSpec(jb)
+		_, err = sd.ServicesForSpec(testutils.Context(t), jb)
 		require.NoError(t, err)
 	})
 
@@ -499,7 +500,7 @@ answer1      [type=median index=0];
 			config.Database(),
 			servicetest.Run(t, mailboxtest.NewMonitor(t)),
 		)
-		_, err = sd.ServicesForSpec(jb)
+		_, err = sd.ServicesForSpec(testutils.Context(t), jb)
 		require.NoError(t, err)
 	})
 
@@ -527,7 +528,7 @@ answer1      [type=median index=0];
 			config.Database(),
 			servicetest.Run(t, mailboxtest.NewMonitor(t)),
 		)
-		_, err = sd.ServicesForSpec(jb)
+		_, err = sd.ServicesForSpec(testutils.Context(t), jb)
 		require.NoError(t, err)
 	})
 
@@ -584,7 +585,7 @@ answer1      [type=median index=0];
 			)
 
 			jb.OCROracleSpec.CaptureEATelemetry = tc.jbCaptureEATelemetry
-			services, err := sd.ServicesForSpec(jb)
+			services, err := sd.ServicesForSpec(testutils.Context(t), jb)
 			require.NoError(t, err)
 
 			enhancedTelemetryServiceCreated := false
@@ -626,7 +627,7 @@ answer1      [type=median index=0];
 			config.Database(),
 			servicetest.Run(t, mailboxtest.NewMonitor(t)),
 		)
-		services, err := sd.ServicesForSpec(*jb)
+		services, err := sd.ServicesForSpec(testutils.Context(t), *jb)
 		require.NoError(t, err)
 
 		// Return an error getting the contract code.
@@ -908,7 +909,7 @@ func TestRunner_Success_Callback_AsyncJob(t *testing.T) {
 		require.Empty(t, run.PipelineTaskRuns[1].Error)
 		require.Empty(t, run.PipelineTaskRuns[2].Error)
 		require.Empty(t, run.PipelineTaskRuns[3].Error)
-		require.Equal(t, pipeline.JSONSerializable{Val: []interface{}{"123450000000000000000"}, Valid: true}, run.Outputs)
+		require.Equal(t, jsonserializable.JSONSerializable{Val: []interface{}{"123450000000000000000"}, Valid: true}, run.Outputs)
 		require.Equal(t, pipeline.RunErrors{null.String{NullString: sql.NullString{String: "", Valid: false}}}, run.FatalErrors)
 	})
 	// Delete the job
@@ -1086,7 +1087,7 @@ func TestRunner_Error_Callback_AsyncJob(t *testing.T) {
 		assert.Equal(t, "something exploded in EA", run.PipelineTaskRuns[1].Error.String)
 		assert.True(t, run.PipelineTaskRuns[2].Error.Valid)
 		assert.True(t, run.PipelineTaskRuns[3].Error.Valid)
-		require.Equal(t, pipeline.JSONSerializable{Val: []interface{}{interface{}(nil)}, Valid: true}, run.Outputs)
+		require.Equal(t, jsonserializable.JSONSerializable{Val: []interface{}{interface{}(nil)}, Valid: true}, run.Outputs)
 		require.Equal(t, pipeline.RunErrors{null.String{NullString: sql.NullString{String: "task inputs: too many errors", Valid: true}}}, run.FatalErrors)
 	})
 	// Delete the job
