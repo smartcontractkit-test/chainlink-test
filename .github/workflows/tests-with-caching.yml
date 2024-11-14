@@ -1,0 +1,58 @@
+name: Core Tests w/ Caching
+
+# Run on key branches to make sure integration is good, otherwise run on all PR's
+on:
+  push:
+    branches:
+      - develop
+      - "release/*"
+  merge_group:
+  pull_request:
+
+jobs:
+
+  update-test-binary-hashs:
+    if: ${{ github.ref == 'refs/heads/develop' }}
+    runs-on: ubuntu22.04-32cores-128GB
+    name: Update Test Binaries Hashes
+    env:
+      # We explicitly have this env var not be "CL_DATABASE_URL" to avoid having it be used by core related tests
+      # when they should not be using it, while still allowing us to DRY up the setup
+      DB_URL: postgresql://postgres:postgres@localhost:5432/chainlink_test?sslmode=disable
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v4.2.1
+
+      - name: Change Modtime of Files (cache optimization)
+        shell: bash
+        run: |
+          find . -type f,d -exec touch -r {} -d '1970-01-01T00:00:01' {} \; || true
+      
+      - name: Setup Go
+        uses: ./.github/actions/setup-go
+        with:
+          restore-build-cache-only: true
+          # piggy back on go_core_tests for caching
+          build-cache-version: 'go_core_tests'
+      
+      - name: Build Test Binaries
+        shell: bash
+        env:
+          CL_DATABASE_URL: ${{ env.DB_URL }}
+          BUILD_CONCURRENCY: "32"
+        run: |
+          ./tools/bin/build-test-binaries-with-concurrency
+
+      - name: Hash Test Binaries
+        shell: bash
+        working-directory: './testsout'
+        run: |
+          echo "{" > test_hashes.json
+          for file in $(find * -type f -name '*-test'); do
+            hash=$(sha256sum "$file" | cut -d ' ' -f1)
+            echo "\"$file\": \"$hash\"," >> test_hashes.json
+          done
+          echo "}" >> test_hashes.json
+          echo test-binaries-file="./testsout/test_hashes.json" >> $GITHUB_OUTPUT
+          echo test-binaries-json=$(cat test_hashes.json) >> $GITHUB_OUTPUT
+

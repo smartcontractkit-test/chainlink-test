@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"reflect"
 	"sort"
@@ -10,14 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/google/uuid"
-	"github.com/mitchellh/mapstructure"
 	pkgerrors "github.com/pkg/errors"
 	"gopkg.in/guregu/null.v4"
 
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
 	cutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
+
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	cnull "github.com/smartcontractkit/chainlink/v2/core/null"
@@ -28,6 +30,7 @@ const (
 	BlockhashStoreJobType          string = "blockhashstore"
 	BootstrapJobType               string = "bootstrap"
 	CronJobType                    string = "cron"
+	CCIPJobType                    string = "ccip"
 	DirectRequestJobType           string = "directrequest"
 	FluxMonitorJobType             string = "fluxmonitor"
 	GatewayJobType                 string = "gateway"
@@ -40,9 +43,8 @@ const (
 	VRFJobType                     string = "vrf"
 	WebhookJobType                 string = "webhook"
 	WorkflowJobType                string = "workflow"
+	StandardCapabilitiesJobType    string = "standardcapabilities"
 )
-
-//go:generate mockery --quiet --name Config --output ./mocks/ --case=underscore
 
 type (
 	Task interface {
@@ -58,6 +60,8 @@ type (
 		TaskRetries() uint32
 		TaskMinBackoff() time.Duration
 		TaskMaxBackoff() time.Duration
+		TaskTags() string
+		GetDescendantTasks() []Task
 	}
 
 	Config interface {
@@ -217,9 +221,20 @@ func (result *TaskRunResult) IsTerminal() bool {
 // TaskRunResults represents a collection of results for all task runs for one pipeline run
 type TaskRunResults []TaskRunResult
 
+// GetTaskRunResultsFinishedAt returns latest finishedAt time from TaskRunResults.
+func (trrs TaskRunResults) GetTaskRunResultsFinishedAt() time.Time {
+	var finishedTime time.Time
+	for _, trr := range trrs {
+		if trr.FinishedAt.Valid && trr.FinishedAt.Time.After(finishedTime) {
+			finishedTime = trr.FinishedAt.Time
+		}
+	}
+	return finishedTime
+}
+
 // FinalResult pulls the FinalResult for the pipeline_run from the task runs
 // It needs to respect the output index of each task
-func (trrs TaskRunResults) FinalResult(l logger.Logger) FinalResult {
+func (trrs TaskRunResults) FinalResult() FinalResult {
 	var found bool
 	var fr FinalResult
 	sort.Slice(trrs, func(i, j int) bool {
@@ -235,7 +250,7 @@ func (trrs TaskRunResults) FinalResult(l logger.Logger) FinalResult {
 	}
 
 	if !found {
-		l.Panicw("Expected at least one task to be final", "tasks", trrs)
+		panic(fmt.Sprintf("expected at least one task to be final: %v", trrs))
 	}
 	return fr
 }
@@ -248,6 +263,16 @@ func (trrs TaskRunResults) Terminals() (terminals []TaskRunResult) {
 		}
 	}
 	return
+}
+
+// GetNextTaskOf returns the task with the next id or nil if it does not exist
+func (trrs *TaskRunResults) GetTaskRunResultOf(task Task) *TaskRunResult {
+	for _, trr := range *trrs {
+		if trr.Task.Base().id == task.Base().id {
+			return &trr
+		}
+	}
+	return nil
 }
 
 // GetNextTaskOf returns the task with the next id or nil if it does not exist
@@ -404,9 +429,11 @@ func UnmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID int, dotID 
 		return nil, pkgerrors.Errorf(`unknown task type: "%v"`, taskType)
 	}
 
+	metadata := mapstructure.Metadata{}
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:           task,
 		WeaklyTypedInput: true,
+		Metadata:         &metadata,
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
 			func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
@@ -430,6 +457,23 @@ func UnmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID int, dotID 
 	if err != nil {
 		return nil, err
 	}
+
+	// valid explicit index values are 0-based
+	for _, key := range metadata.Keys {
+		if key == "index" {
+			if task.OutputIndex() < 0 {
+				return nil, errors.New("result sorting indexes should start with 0")
+			}
+		}
+	}
+
+	// the 'unset' value should be -1 to allow explicit indexes to be 0-based
+	for _, key := range metadata.Unset {
+		if key == "index" {
+			task.Base().Index = -1
+		}
+	}
+
 	return task, nil
 }
 

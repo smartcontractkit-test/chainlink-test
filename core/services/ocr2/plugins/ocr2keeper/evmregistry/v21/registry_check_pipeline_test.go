@@ -8,10 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	types3 "github.com/smartcontractkit/chainlink-automation/pkg/v3/types"
-
-	types2 "github.com/smartcontractkit/chainlink-common/pkg/types"
-
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -20,15 +16,20 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	types2 "github.com/smartcontractkit/chainlink-common/pkg/types"
 	ocr2keepers "github.com/smartcontractkit/chainlink-common/pkg/types/automation"
 
+	types3 "github.com/smartcontractkit/chainlink-automation/pkg/v3/types"
+
 	evmClientMocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/client/mocks"
+	gasMocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/logpoller"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
+	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 	ac "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/i_automation_v21_plus_common"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/streams_lookup_compatible_interface"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
-	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/core"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/encoding"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/mocks"
@@ -80,7 +81,7 @@ func TestRegistry_GetBlockAndUpkeepId(t *testing.T) {
 }
 
 func TestRegistry_VerifyCheckBlock(t *testing.T) {
-	lggr := logger.TestLogger(t)
+	lggr := logger.Test(t)
 	upkeepId := ocr2keepers.UpkeepIdentifier{}
 	upkeepId.FromBigInt(big.NewInt(12345))
 	tests := []struct {
@@ -195,7 +196,7 @@ func TestRegistry_VerifyCheckBlock(t *testing.T) {
 			}
 			bs.latestBlock.Store(tc.latestBlock)
 			e := &EvmRegistry{
-				lggr:   lggr,
+				lggr:   logger.Sugared(lggr),
 				bs:     bs,
 				poller: tc.poller,
 			}
@@ -215,19 +216,19 @@ func TestRegistry_VerifyCheckBlock(t *testing.T) {
 type mockLogPoller struct {
 	logpoller.LogPoller
 	GetBlocksRangeFn func(ctx context.Context, numbers []uint64) ([]logpoller.LogPollerBlock, error)
-	IndexedLogsFn    func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error)
+	IndexedLogsFn    func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error)
 }
 
 func (p *mockLogPoller) GetBlocksRange(ctx context.Context, numbers []uint64) ([]logpoller.LogPollerBlock, error) {
 	return p.GetBlocksRangeFn(ctx, numbers)
 }
 
-func (p *mockLogPoller) IndexedLogs(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+func (p *mockLogPoller) IndexedLogs(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 	return p.IndexedLogsFn(ctx, eventSig, address, topicIndex, topicValues, confs)
 }
 
 func TestRegistry_VerifyLogExists(t *testing.T) {
-	lggr := logger.TestLogger(t)
+	lggr := logger.Test(t)
 	upkeepId := ocr2keepers.UpkeepIdentifier{}
 	upkeepId.FromBigInt(big.NewInt(12345))
 
@@ -344,13 +345,13 @@ func TestRegistry_VerifyLogExists(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutils.Context(t)
 			bs := &BlockSubscriber{
 				blocks: tc.blocks,
 			}
 			e := &EvmRegistry{
-				lggr: lggr,
+				lggr: logger.Sugared(lggr),
 				bs:   bs,
-				ctx:  testutils.Context(t),
 			}
 
 			if tc.makeEthCall {
@@ -368,7 +369,7 @@ func TestRegistry_VerifyLogExists(t *testing.T) {
 				e.client = client
 			}
 
-			reason, state, retryable := e.verifyLogExists(tc.upkeepId, tc.payload)
+			reason, state, retryable := e.verifyLogExists(ctx, tc.upkeepId, tc.payload)
 			assert.Equal(t, tc.reason, reason)
 			assert.Equal(t, tc.state, state)
 			assert.Equal(t, tc.retryable, retryable)
@@ -377,7 +378,7 @@ func TestRegistry_VerifyLogExists(t *testing.T) {
 }
 
 func TestRegistry_CheckUpkeeps(t *testing.T) {
-	lggr := logger.TestLogger(t)
+	lggr := logger.Test(t)
 	uid0 := core.GenUpkeepID(types3.UpkeepType(0), "p0")
 	uid1 := core.GenUpkeepID(types3.UpkeepType(1), "p1")
 	uid2 := core.GenUpkeepID(types3.UpkeepType(1), "p2")
@@ -507,7 +508,7 @@ func TestRegistry_CheckUpkeeps(t *testing.T) {
 			}
 			bs.latestBlock.Store(tc.latestBlock)
 			e := &EvmRegistry{
-				lggr:   lggr,
+				lggr:   logger.Sugared(lggr),
 				bs:     bs,
 				poller: tc.poller,
 			}
@@ -651,6 +652,13 @@ func TestRegistry_SimulatePerformUpkeeps(t *testing.T) {
 				}).Once()
 			e.client = client
 
+			mockReg := mocks.NewRegistry(t)
+			mockReg.On("GetUpkeep", mock.Anything, mock.Anything).Return(
+				encoding.UpkeepInfo{OffchainConfig: make([]byte, 0)},
+				nil,
+			).Times(2)
+			e.registry = mockReg
+
 			results, err := e.simulatePerformUpkeeps(testutils.Context(t), tc.inputs)
 			assert.Equal(t, tc.results, results)
 			assert.Equal(t, tc.err, err)
@@ -660,7 +668,7 @@ func TestRegistry_SimulatePerformUpkeeps(t *testing.T) {
 
 // setups up an evm registry for tests.
 func setupEVMRegistry(t *testing.T) *EvmRegistry {
-	lggr := logger.TestLogger(t)
+	lggr := logger.Test(t)
 	addr := common.HexToAddress("0x6cA639822c6C241Fa9A7A6b5032F6F7F1C513CAD")
 	keeperRegistryABI, err := abi.JSON(strings.NewReader(ac.IAutomationV21PlusCommonABI))
 	require.Nil(t, err, "need registry abi")
@@ -670,9 +678,10 @@ func setupEVMRegistry(t *testing.T) *EvmRegistry {
 	mockReg := mocks.NewRegistry(t)
 	mockHttpClient := mocks.NewHttpClient(t)
 	client := evmClientMocks.NewClient(t)
+	ge := gasMocks.NewEvmFeeEstimator(t)
 
 	r := &EvmRegistry{
-		lggr:         lggr,
+		lggr:         logger.Sugared(lggr),
 		poller:       logPoller,
 		addr:         addr,
 		client:       client,
@@ -694,6 +703,8 @@ func setupEVMRegistry(t *testing.T) *EvmRegistry {
 			AllowListCache: cache.New(defaultAllowListExpiration, cleanupInterval),
 		},
 		hc: mockHttpClient,
+		bs: &BlockSubscriber{latestBlock: atomic.Pointer[ocr2keepers.BlockKey]{}},
+		ge: ge,
 	}
 	return r
 }

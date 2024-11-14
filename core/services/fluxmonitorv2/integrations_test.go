@@ -16,17 +16,16 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jmoiron/sqlx"
-
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
+
 	"github.com/smartcontractkit/chainlink/v2/core/bridges"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/log"
@@ -36,17 +35,16 @@ import (
 	faw "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/flux_aggregator_wrapper"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/link_token_interface"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest/heavyweight"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/evmtest"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/v2/core/services/fluxmonitorv2"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/ethkey"
-	"github.com/smartcontractkit/chainlink/v2/core/services/pg"
 	"github.com/smartcontractkit/chainlink/v2/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/v2/core/store/models"
 	"github.com/smartcontractkit/chainlink/v2/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/utils/testutils/heavyweight"
 	"github.com/smartcontractkit/chainlink/v2/core/web"
 )
 
@@ -71,7 +69,7 @@ type fluxAggregatorUniverse struct {
 	flagsContractAddress      common.Address
 	evmChainID                big.Int
 	// Abstraction representation of the ethereum blockchain
-	backend       *backends.SimulatedBackend
+	backend       types.Backend
 	aggregatorABI abi.ABI
 	// Cast of participants
 	sergey  *bind.TransactOpts // Owns all the LINK initially
@@ -118,23 +116,23 @@ func setupFluxAggregatorUniverse(t *testing.T, configOptions ...func(cfg *fluxAg
 	f.neil = testutils.MustNewSimTransactor(t)
 	f.ned = testutils.MustNewSimTransactor(t)
 	f.nallory = oracleTransactor
-	genesisData := core.GenesisAlloc{
+	genesisData := gethtypes.GenesisAlloc{
 		f.sergey.From:  {Balance: assets.Ether(1000).ToInt()},
 		f.neil.From:    {Balance: assets.Ether(1000).ToInt()},
 		f.ned.From:     {Balance: assets.Ether(1000).ToInt()},
 		f.nallory.From: {Balance: assets.Ether(1000).ToInt()},
 	}
-	gasLimit := uint32(ethconfig.Defaults.Miner.GasCeil * 2)
+	gasLimit := ethconfig.Defaults.Miner.GasCeil * 2
 	f.backend = cltest.NewSimulatedBackend(t, genesisData, gasLimit)
 
 	f.aggregatorABI, err = abi.JSON(strings.NewReader(faw.FluxAggregatorABI))
 	require.NoError(t, err, "could not parse FluxAggregator ABI")
 
 	var linkAddress common.Address
-	linkAddress, _, f.linkContract, err = link_token_interface.DeployLinkToken(f.sergey, f.backend)
+	linkAddress, _, f.linkContract, err = link_token_interface.DeployLinkToken(f.sergey, f.backend.Client())
 	require.NoError(t, err, "failed to deploy link contract to simulated ethereum blockchain")
 
-	f.flagsContractAddress, _, f.flagsContract, err = flags_wrapper.DeployFlags(f.sergey, f.backend, f.sergey.From)
+	f.flagsContractAddress, _, f.flagsContract, err = flags_wrapper.DeployFlags(f.sergey, f.backend.Client(), f.sergey.From)
 	require.NoError(t, err, "failed to deploy flags contract to simulated ethereum blockchain")
 
 	f.backend.Commit()
@@ -146,10 +144,10 @@ func setupFluxAggregatorUniverse(t *testing.T, configOptions ...func(cfg *fluxAg
 	waitTimeMs := int64(faTimeout * 5000)
 	time.Sleep(time.Duration((waitTimeMs + waitTimeMs/20) * int64(time.Millisecond)))
 	oldGasLimit := f.sergey.GasLimit
-	f.sergey.GasLimit = uint64(gasLimit)
+	f.sergey.GasLimit = gasLimit
 	f.aggregatorContractAddress, _, f.aggregatorContract, err = faw.DeployFluxAggregator(
 		f.sergey,
-		f.backend,
+		f.backend.Client(),
 		linkAddress,
 		big.NewInt(fee),
 		faTimeout,
@@ -166,6 +164,7 @@ func setupFluxAggregatorUniverse(t *testing.T, configOptions ...func(cfg *fluxAg
 
 	_, err = f.linkContract.Transfer(f.sergey, f.aggregatorContractAddress, oneEth) // Actually, LINK
 	require.NoError(t, err, "failed to fund FluxAggregator contract with LINK")
+	f.backend.Commit()
 
 	_, err = f.aggregatorContract.UpdateAvailableFunds(f.sergey)
 	require.NoError(t, err, "failed to update aggregator's availableFunds field")
@@ -253,7 +252,9 @@ type answerParams struct {
 func checkSubmission(t *testing.T, p answerParams, currentBalance int64, receiptBlock uint64) {
 	t.Helper()
 	if receiptBlock == 0 {
-		receiptBlock = p.fa.backend.Blockchain().CurrentBlock().Number.Uint64()
+		h, err := p.fa.backend.Client().HeaderByNumber(testutils.Context(t), nil)
+		require.NoError(t, err)
+		receiptBlock = h.Number.Uint64()
 	}
 	blockRange := &bind.FilterOpts{Start: 0, End: &receiptBlock}
 
@@ -355,7 +356,7 @@ func submitAnswer(t *testing.T, p answerParams) {
 	checkSubmission(t, p, cb.Int64(), 0)
 }
 
-func awaitSubmission(t *testing.T, backend *backends.SimulatedBackend, submissionReceived chan *faw.FluxAggregatorSubmissionReceived) (
+func awaitSubmission(t *testing.T, backend types.Backend, submissionReceived chan *faw.FluxAggregatorSubmissionReceived) (
 	receiptBlock uint64, answer int64,
 ) {
 	t.Helper()
@@ -378,7 +379,6 @@ func assertNoSubmission(t *testing.T,
 	duration time.Duration,
 	msg string,
 ) {
-
 	// drain the channel
 	for len(submissionReceived) > 0 {
 		<-submissionReceived
@@ -393,32 +393,35 @@ func assertNoSubmission(t *testing.T,
 
 // assertPipelineRunCreated checks that a pipeline exists for a given round and
 // verifies the answer
-func assertPipelineRunCreated(t *testing.T, db *sqlx.DB, roundID int64, result int64) pipeline.Run {
+func assertPipelineRunCreated(t *testing.T, ds sqlutil.DataSource, roundID int64, result int64) pipeline.Run {
+	ctx := testutils.Context(t)
 	// Fetch the stats to extract the run id
 	stats := fluxmonitorv2.FluxMonitorRoundStatsV2{}
-	require.NoError(t, db.Get(&stats, "SELECT * FROM flux_monitor_round_stats_v2 WHERE round_id = $1", roundID))
+	require.NoError(t, ds.GetContext(ctx, &stats, "SELECT * FROM flux_monitor_round_stats_v2 WHERE round_id = $1", roundID))
 	if stats.ID == 0 {
 		t.Fatalf("Stats for round id: %v not found!", roundID)
 	}
 	require.True(t, stats.PipelineRunID.Valid)
 	// Verify the pipeline run data
 	run := pipeline.Run{}
-	require.NoError(t, db.Get(&run, `SELECT * FROM pipeline_runs WHERE id = $1`, stats.PipelineRunID.Int64), "runID %v", stats.PipelineRunID)
+	require.NoError(t, ds.GetContext(ctx, &run, `SELECT * FROM pipeline_runs WHERE id = $1`, stats.PipelineRunID.Int64), "runID %v", stats.PipelineRunID)
 	assert.Equal(t, []interface{}{result}, run.Outputs.Val)
 	return run
 }
 
-func checkLogWasConsumed(t *testing.T, fa fluxAggregatorUniverse, db *sqlx.DB, pipelineSpecID int32, blockNumber uint64, cfg pg.QConfig) {
+func checkLogWasConsumed(t *testing.T, fa fluxAggregatorUniverse, ds sqlutil.DataSource, pipelineSpecID int32, blockNumber uint64) {
 	t.Helper()
 	lggr := logger.TestLogger(t)
 	lggr.Infof("Waiting for log on block: %v, job id: %v", blockNumber, pipelineSpecID)
 
 	g := gomega.NewWithT(t)
 	g.Eventually(func() bool {
-		block := fa.backend.Blockchain().GetBlockByNumber(blockNumber)
+		ctx := testutils.Context(t)
+		block, err := fa.backend.Client().BlockByNumber(ctx, new(big.Int).SetUint64(blockNumber))
+		require.NoError(t, err)
 		require.NotNil(t, block)
-		orm := log.NewORM(db, fa.evmChainID)
-		consumed, err := orm.WasBroadcastConsumed(testutils.Context(t), block.Hash(), 0, pipelineSpecID)
+		orm := log.NewORM(ds, fa.evmChainID)
+		consumed, err := orm.WasBroadcastConsumed(ctx, block.Hash(), 0, pipelineSpecID)
 		require.NoError(t, err)
 		fa.backend.Commit()
 		return consumed
@@ -483,7 +486,7 @@ func TestFluxMonitor_Deviation(t *testing.T) {
 			)
 			t.Cleanup(mockServer.Close)
 			u, _ := url.Parse(mockServer.URL)
-			require.NoError(t, app.BridgeORM().CreateBridgeType(&bridges.BridgeType{
+			require.NoError(t, app.BridgeORM().CreateBridgeType(testutils.Context(t), &bridges.BridgeType{
 				Name: "bridge",
 				URL:  models.WebURL(*u),
 			}))
@@ -559,12 +562,12 @@ func TestFluxMonitor_Deviation(t *testing.T) {
 				initialBalance,
 				receiptBlock,
 			)
-			assertPipelineRunCreated(t, app.GetSqlxDB(), 1, int64(100))
+			assertPipelineRunCreated(t, app.GetDB(), 1, int64(100))
 
 			// Need to wait until NewRound log is consumed - otherwise there is a chance
 			// it will arrive after the next answer is submitted, and cause
 			// DeleteFluxMonitorRoundsBackThrough to delete previous stats
-			checkLogWasConsumed(t, fa, app.GetSqlxDB(), jobID, receiptBlock, app.GetConfig().Database())
+			checkLogWasConsumed(t, fa, app.GetDB(), jobID, receiptBlock)
 
 			lggr.Info("Updating price to 103")
 			// Change reported price to a value outside the deviation
@@ -588,12 +591,12 @@ func TestFluxMonitor_Deviation(t *testing.T) {
 				initialBalance-fee,
 				receiptBlock,
 			)
-			assertPipelineRunCreated(t, app.GetSqlxDB(), 2, int64(103))
+			assertPipelineRunCreated(t, app.GetDB(), 2, int64(103))
 
 			// Need to wait until NewRound log is consumed - otherwise there is a chance
 			// it will arrive after the next answer is submitted, and cause
 			// DeleteFluxMonitorRoundsBackThrough to delete previous stats
-			checkLogWasConsumed(t, fa, app.GetSqlxDB(), jobID, receiptBlock, app.GetConfig().Database())
+			checkLogWasConsumed(t, fa, app.GetDB(), jobID, receiptBlock)
 
 			// Should not received a submission as it is inside the deviation
 			reportPrice.Store(104)
@@ -795,7 +798,7 @@ ds1 -> ds1_parse
 
 	// node doesn't submit initial response, because flag is up
 	// Wait here so the next lower flags doesn't trigger immediately
-	cltest.AssertPipelineRunsStays(t, j.PipelineSpec.ID, app.GetSqlxDB(), 0)
+	cltest.AssertPipelineRunsStays(t, j.PipelineSpec.ID, app.GetDB(), 0)
 
 	// lower global kill switch flag - should trigger job run
 	_, err = fa.flagsContract.LowerFlags(fa.sergey, []common.Address{evmutils.ZeroAddress})
@@ -903,14 +906,14 @@ ds1 -> ds1_parse
 
 	j := cltest.CreateJobViaWeb2(t, app, string(requestBody))
 
-	closer := cltest.Mine(fa.backend, 500*time.Millisecond)
+	_, closer := cltest.Mine(fa.backend, 500*time.Millisecond)
 	defer closer()
 
 	// We should see a spec error because the value is too large to submit on-chain.
 	jobID, err := strconv.ParseInt(j.ID, 10, 32)
 	require.NoError(t, err)
 
-	jse := cltest.WaitForSpecErrorV2(t, app.GetSqlxDB(), int32(jobID), 1)
+	jse := cltest.WaitForSpecErrorV2(t, app.GetDB(), int32(jobID), 1)
 	assert.Contains(t, jse[0].Description, "Answer is outside acceptable range")
 }
 
@@ -1067,7 +1070,7 @@ ds1 -> ds1_parse -> ds1_multiply
 	assert.Error(t, err, "FA allowed chainlink node to start a new round early")
 
 	//- finally, ensure it can start a legitimate round after restartDelay is
-	//reached start an intervening round
+	// reached start an intervening round
 	submitAnswer(t, answerParams{fa: &fa, roundId: newRound,
 		answer: processedAnswer, from: fa.ned, isNewRound: true,
 		completesAnswer: false})

@@ -4,9 +4,9 @@ import (
 	"context"
 	"io"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/smartcontractkit/libocr/networking/rageping"
 
 	ocrnetworking "github.com/smartcontractkit/libocr/networking"
 	ocr1types "github.com/smartcontractkit/libocr/offchainreporting/types"
@@ -14,12 +14,12 @@ import (
 
 	commonlogger "github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 
 	"github.com/smartcontractkit/chainlink/v2/core/config"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/p2pkey"
-	"github.com/smartcontractkit/chainlink/v2/core/services/pg"
 )
 
 type PeerWrapperOCRConfig interface {
@@ -43,8 +43,7 @@ type (
 		keyStore keystore.Master
 		p2pCfg   config.P2P
 		ocrCfg   PeerWrapperOCRConfig
-		dbConfig pg.QConfig
-		db       *sqlx.DB
+		ds       sqlutil.DataSource
 		lggr     logger.Logger
 		PeerID   p2pkey.PeerID
 
@@ -56,6 +55,9 @@ type (
 
 		// OCR2 peer adapter
 		Peer2 *peerAdapterOCR2
+
+		// PeerGroupFactory can be used to create PeerGroup instances
+		PeerGroupFactory ocrnetworking.PeerGroupFactory
 	}
 )
 
@@ -69,13 +71,12 @@ func ValidatePeerWrapperConfig(config config.P2P) error {
 // NewSingletonPeerWrapper creates a new peer based on the p2p keys in the keystore
 // It currently only supports one peerID/key
 // It should be fairly easy to modify it to support multiple peerIDs/keys using e.g. a map
-func NewSingletonPeerWrapper(keyStore keystore.Master, p2pCfg config.P2P, ocrCfg PeerWrapperOCRConfig, dbConfig pg.QConfig, db *sqlx.DB, lggr logger.Logger) *SingletonPeerWrapper {
+func NewSingletonPeerWrapper(keyStore keystore.Master, p2pCfg config.P2P, ocrCfg PeerWrapperOCRConfig, ds sqlutil.DataSource, lggr logger.Logger) *SingletonPeerWrapper {
 	return &SingletonPeerWrapper{
 		keyStore: keyStore,
 		p2pCfg:   p2pCfg,
 		ocrCfg:   ocrCfg,
-		dbConfig: dbConfig,
-		db:       db,
+		ds:       ds,
 		lggr:     lggr.Named("SingletonPeerWrapper"),
 	}
 }
@@ -104,6 +105,9 @@ func (p *SingletonPeerWrapper) Start(context.Context) error {
 			peer.OCR2BinaryNetworkEndpointFactory(),
 			peer.OCR2BootstrapperFactory(),
 		}
+
+		p.PeerGroupFactory = peer.PeerGroupFactory()
+
 		p.peerCloser = peer
 		return nil
 	})
@@ -120,7 +124,7 @@ func (p *SingletonPeerWrapper) peerConfig() (ocrnetworking.PeerConfig, error) {
 	}
 	p.PeerID = key.PeerID()
 
-	discovererDB := NewDiscovererDatabase(p.db.DB, p.PeerID.Raw())
+	discovererDB := NewOCRDiscovererDatabase(p.ds, p.PeerID.Raw())
 
 	config := p.p2pCfg
 	peerConfig := ocrnetworking.PeerConfig{
@@ -138,7 +142,8 @@ func (p *SingletonPeerWrapper) peerConfig() (ocrnetworking.PeerConfig, error) {
 			IncomingMessageBufferSize: config.IncomingMessageBufferSize(),
 			OutgoingMessageBufferSize: config.OutgoingMessageBufferSize(),
 		},
-		MetricsRegisterer: prometheus.DefaultRegisterer,
+		MetricsRegisterer:            prometheus.DefaultRegisterer,
+		LatencyMetricsServiceConfigs: rageping.DefaultConfigs(),
 	}
 
 	return peerConfig, nil

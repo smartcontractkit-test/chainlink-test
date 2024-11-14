@@ -2,6 +2,7 @@ package cmd_test
 
 import (
 	"flag"
+	"fmt"
 	"math/big"
 	"os"
 	"strconv"
@@ -12,11 +13,11 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/mailbox"
 
 	"github.com/smartcontractkit/chainlink/v2/common/client"
+	"github.com/smartcontractkit/chainlink/v2/core/capabilities"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/legacyevm"
 	"github.com/smartcontractkit/chainlink/v2/core/cmd"
 	cmdMocks "github.com/smartcontractkit/chainlink/v2/core/cmd/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest/heavyweight"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/configtest"
@@ -31,6 +32,7 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/store/dialects"
 	"github.com/smartcontractkit/chainlink/v2/core/store/models"
 	"github.com/smartcontractkit/chainlink/v2/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/utils/testutils/heavyweight"
 	"github.com/smartcontractkit/chainlink/v2/plugins"
 
 	gethTypes "github.com/ethereum/go-ethereum/core/types"
@@ -41,10 +43,11 @@ import (
 	"github.com/urfave/cli"
 )
 
-func genTestEVMRelayers(t *testing.T, opts legacyevm.ChainRelayExtenderConfig, ks evmrelayer.CSAETHKeystore) *chainlink.CoreRelayerChainInteroperators {
+func genTestEVMRelayers(t *testing.T, opts legacyevm.ChainRelayOpts, ks evmrelayer.CSAETHKeystore) *chainlink.CoreRelayerChainInteroperators {
 	f := chainlink.RelayerFactory{
-		Logger:       opts.Logger,
-		LoopRegistry: plugins.NewLoopRegistry(opts.Logger, opts.AppConfig.Tracing()),
+		Logger:               opts.Logger,
+		LoopRegistry:         plugins.NewLoopRegistry(opts.Logger, opts.AppConfig.Tracing(), opts.AppConfig.Telemetry(), nil, ""),
+		CapabilitiesRegistry: capabilities.NewRegistry(opts.Logger),
 	}
 
 	relayers, err := chainlink.NewCoreRelayerChainInteroperators(chainlink.InitEVM(testutils.Context(t), f, chainlink.EVMFactoryConfig{
@@ -55,7 +58,6 @@ func genTestEVMRelayers(t *testing.T, opts legacyevm.ChainRelayExtenderConfig, k
 		t.Fatal(err)
 	}
 	return relayers
-
 }
 
 func TestShell_RunNodeWithPasswords(t *testing.T) {
@@ -80,19 +82,18 @@ func TestShell_RunNodeWithPasswords(t *testing.T) {
 				c.Insecure.OCRDevelopmentMode = nil
 			})
 			db := pgtest.NewSqlxDB(t)
-			keyStore := cltest.NewKeyStore(t, db, cfg.Database())
-			authProviderORM := localauth.NewORM(db, time.Minute, logger.TestLogger(t), cfg.Database(), audit.NoopLogger)
+			keyStore := cltest.NewKeyStore(t, db)
+			authProviderORM := localauth.NewORM(db, time.Minute, logger.TestLogger(t), audit.NoopLogger)
 
 			lggr := logger.TestLogger(t)
 
-			opts := legacyevm.ChainRelayExtenderConfig{
+			opts := legacyevm.ChainRelayOpts{
 				Logger:   lggr,
 				KeyStore: keyStore.Eth(),
 				ChainOpts: legacyevm.ChainOpts{
 					AppConfig: cfg,
 					MailMon:   &mailbox.Monitor{},
-					SqlxDB:    db,
-					DB:        db,
+					DS:        db,
 				},
 			}
 			testRelayers := genTestEVMRelayers(t, opts, keyStore)
@@ -121,7 +122,7 @@ func TestShell_RunNodeWithPasswords(t *testing.T) {
 				Config:                 cfg,
 				FallbackAPIInitializer: apiPrompt,
 				Runner:                 cltest.EmptyRunner{},
-				AppFactory:             cltest.InstanceAppFactory{App: app},
+				AppFactory:             cltest.InstanceAppFactoryWithKeystoreMock{App: app},
 				Logger:                 lggr,
 			}
 
@@ -174,14 +175,14 @@ func TestShell_RunNodeWithAPICredentialsFile(t *testing.T) {
 				c.Insecure.OCRDevelopmentMode = nil
 			})
 			db := pgtest.NewSqlxDB(t)
-			authProviderORM := localauth.NewORM(db, time.Minute, logger.TestLogger(t), cfg.Database(), audit.NoopLogger)
+			authProviderORM := localauth.NewORM(db, time.Minute, logger.TestLogger(t), audit.NoopLogger)
 
 			// Clear out fixture users/users created from the other test cases
 			// This asserts that on initial run with an empty users table that the credentials file will instantiate and
 			// create/run with a new admin user
 			pgtest.MustExec(t, db, "DELETE FROM users;")
 
-			keyStore := cltest.NewKeyStore(t, db, cfg.Database())
+			keyStore := cltest.NewKeyStore(t, db)
 			_, err := keyStore.Eth().Create(testutils.Context(t), &cltest.FixtureChainID)
 			require.NoError(t, err)
 
@@ -190,14 +191,13 @@ func TestShell_RunNodeWithAPICredentialsFile(t *testing.T) {
 			ethClient.On("BalanceAt", mock.Anything, mock.Anything, mock.Anything).Return(big.NewInt(10), nil).Maybe()
 
 			lggr := logger.TestLogger(t)
-			opts := legacyevm.ChainRelayExtenderConfig{
+			opts := legacyevm.ChainRelayOpts{
 				Logger:   lggr,
 				KeyStore: keyStore.Eth(),
 				ChainOpts: legacyevm.ChainOpts{
 					AppConfig: cfg,
 					MailMon:   &mailbox.Monitor{},
-					SqlxDB:    db,
-					DB:        db,
+					DS:        db,
 				},
 			}
 			testRelayers := genTestEVMRelayers(t, opts, keyStore)
@@ -290,7 +290,7 @@ func TestShell_RebroadcastTransactions_Txm(t *testing.T) {
 		// seems to be needed for config validate
 		c.Insecure.OCRDevelopmentMode = nil
 	})
-	keyStore := cltest.NewKeyStore(t, sqlxDB, config.Database())
+	keyStore := cltest.NewKeyStore(t, sqlxDB)
 	_, fromAddress := cltest.MustInsertRandomKey(t, keyStore.Eth())
 
 	txStore := cltest.NewTestTxStore(t, sqlxDB)
@@ -299,9 +299,10 @@ func TestShell_RebroadcastTransactions_Txm(t *testing.T) {
 	lggr := logger.TestLogger(t)
 
 	app := mocks.NewApplication(t)
-	app.On("GetSqlxDB").Return(sqlxDB)
+	app.On("GetDB").Return(sqlxDB)
 	app.On("GetKeyStore").Return(keyStore)
 	app.On("ID").Maybe().Return(uuid.New())
+	app.On("GetConfig").Return(config)
 	ethClient := evmtest.NewEthClientMockWithDefaultChain(t)
 	legacy := cltest.NewLegacyChainsWithMockChain(t, ethClient, config)
 
@@ -370,7 +371,7 @@ func TestShell_RebroadcastTransactions_OutsideRange_Txm(t *testing.T) {
 				c.Insecure.OCRDevelopmentMode = nil
 			})
 
-			keyStore := cltest.NewKeyStore(t, sqlxDB, config.Database())
+			keyStore := cltest.NewKeyStore(t, sqlxDB)
 
 			_, fromAddress := cltest.MustInsertRandomKey(t, keyStore.Eth())
 
@@ -380,9 +381,10 @@ func TestShell_RebroadcastTransactions_OutsideRange_Txm(t *testing.T) {
 			lggr := logger.TestLogger(t)
 
 			app := mocks.NewApplication(t)
-			app.On("GetSqlxDB").Return(sqlxDB)
+			app.On("GetDB").Return(sqlxDB)
 			app.On("GetKeyStore").Return(keyStore)
 			app.On("ID").Maybe().Return(uuid.New())
+			app.On("GetConfig").Return(config)
 			ethClient := evmtest.NewEthClientMockWithDefaultChain(t)
 			ethClient.On("Dial", mock.Anything).Return(nil)
 			legacy := cltest.NewLegacyChainsWithMockChain(t, ethClient, config)
@@ -446,7 +448,7 @@ func TestShell_RebroadcastTransactions_AddressCheck(t *testing.T) {
 				c.Insecure.OCRDevelopmentMode = nil
 			})
 
-			keyStore := cltest.NewKeyStore(t, sqlxDB, config.Database())
+			keyStore := cltest.NewKeyStore(t, sqlxDB)
 
 			_, fromAddress := cltest.MustInsertRandomKey(t, keyStore.Eth())
 
@@ -458,7 +460,7 @@ func TestShell_RebroadcastTransactions_AddressCheck(t *testing.T) {
 			lggr := logger.TestLogger(t)
 
 			app := mocks.NewApplication(t)
-			app.On("GetSqlxDB").Maybe().Return(sqlxDB)
+			app.On("GetDB").Maybe().Return(sqlxDB)
 			app.On("GetKeyStore").Return(keyStore)
 			app.On("ID").Maybe().Return(uuid.New())
 			ethClient := evmtest.NewEthClientMockWithDefaultChain(t)
@@ -487,9 +489,9 @@ func TestShell_RebroadcastTransactions_AddressCheck(t *testing.T) {
 			if test.shouldError {
 				require.ErrorContains(t, client.RebroadcastTransactions(c), test.errorContains)
 			} else {
+				app.On("GetConfig").Return(config).Once()
 				require.NoError(t, client.RebroadcastTransactions(c))
 			}
-
 		})
 	}
 }
@@ -512,4 +514,59 @@ func TestShell_CleanupChainTables(t *testing.T) {
 	require.NoError(t, set.Set("danger", "true"))
 	c := cli.NewContext(nil, set, nil)
 	require.NoError(t, client.CleanupChainTables(c))
+}
+
+func TestShell_RemoveBlocks(t *testing.T) {
+	db := pgtest.NewSqlxDB(t)
+	cfg := configtest.NewGeneralConfig(t, func(c *chainlink.Config, s *chainlink.Secrets) {
+		s.Password.Keystore = models.NewSecret("dummy")
+		c.EVM[0].Nodes[0].Name = ptr("fake")
+		c.EVM[0].Nodes[0].HTTPURL = commonconfig.MustParseURL("http://fake.com")
+		c.EVM[0].Nodes[0].WSURL = commonconfig.MustParseURL("WSS://fake.com/ws")
+		// seems to be needed for config validate
+		c.Insecure.OCRDevelopmentMode = nil
+	})
+
+	lggr := logger.TestLogger(t)
+
+	app := mocks.NewApplication(t)
+	app.On("GetSqlxDB").Maybe().Return(db)
+	shell := cmd.Shell{
+		Config:                 cfg,
+		AppFactory:             cltest.InstanceAppFactory{App: app},
+		FallbackAPIInitializer: cltest.NewMockAPIInitializer(t),
+		Runner:                 cltest.EmptyRunner{},
+		Logger:                 lggr,
+	}
+
+	t.Run("Returns error, if --start is not positive", func(t *testing.T) {
+		set := flag.NewFlagSet("test", 0)
+		flagSetApplyFromAction(shell.RemoveBlocks, set, "")
+		require.NoError(t, set.Set("start", "0"))
+		require.NoError(t, set.Set("evm-chain-id", "12"))
+		c := cli.NewContext(nil, set, nil)
+		err := shell.RemoveBlocks(c)
+		require.ErrorContains(t, err, "Must pass a positive value in '--start' parameter")
+	})
+	t.Run("Returns error, if removal fails", func(t *testing.T) {
+		set := flag.NewFlagSet("test", 0)
+		flagSetApplyFromAction(shell.RemoveBlocks, set, "")
+		require.NoError(t, set.Set("start", "10000"))
+		require.NoError(t, set.Set("evm-chain-id", "12"))
+		expectedError := fmt.Errorf("failed to delete log poller's data")
+		app.On("DeleteLogPollerDataAfter", mock.Anything, big.NewInt(12), int64(10000)).Return(expectedError).Once()
+		c := cli.NewContext(nil, set, nil)
+		err := shell.RemoveBlocks(c)
+		require.ErrorContains(t, err, expectedError.Error())
+	})
+	t.Run("Happy path", func(t *testing.T) {
+		set := flag.NewFlagSet("test", 0)
+		flagSetApplyFromAction(shell.RemoveBlocks, set, "")
+		require.NoError(t, set.Set("start", "10000"))
+		require.NoError(t, set.Set("evm-chain-id", "12"))
+		app.On("DeleteLogPollerDataAfter", mock.Anything, big.NewInt(12), int64(10000)).Return(nil).Once()
+		c := cli.NewContext(nil, set, nil)
+		err := shell.RemoveBlocks(c)
+		require.NoError(t, err)
+	})
 }

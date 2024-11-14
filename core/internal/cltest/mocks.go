@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
-
 	"github.com/jmoiron/sqlx"
+
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 
 	evmclient "github.com/smartcontractkit/chainlink/v2/core/chains/evm/client"
 	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
@@ -82,13 +82,27 @@ func (rm *RendererMock) Render(v interface{}, headers ...string) error {
 	return nil
 }
 
+type InstanceAppFactoryWithKeystoreMock struct {
+	App chainlink.Application
+}
+
+// NewApplication creates a new application with specified config and calls the authenticate function of the keystore
+func (f InstanceAppFactoryWithKeystoreMock) NewApplication(ctx context.Context, cfg chainlink.GeneralConfig, lggr logger.Logger, db *sqlx.DB, ks cmd.TerminalKeyStoreAuthenticator) (chainlink.Application, error) {
+	keyStore := f.App.GetKeyStore()
+	err := ks.Authenticate(ctx, keyStore, cfg.Password())
+	if err != nil {
+		return nil, fmt.Errorf("error authenticating keystore: %w", err)
+	}
+	return f.App, nil
+}
+
 // InstanceAppFactory is an InstanceAppFactory
 type InstanceAppFactory struct {
 	App chainlink.Application
 }
 
 // NewApplication creates a new application with specified config
-func (f InstanceAppFactory) NewApplication(context.Context, chainlink.GeneralConfig, logger.Logger, *sqlx.DB) (chainlink.Application, error) {
+func (f InstanceAppFactory) NewApplication(context.Context, chainlink.GeneralConfig, logger.Logger, *sqlx.DB, cmd.TerminalKeyStoreAuthenticator) (chainlink.Application, error) {
 	return f.App, nil
 }
 
@@ -96,7 +110,7 @@ type seededAppFactory struct {
 	Application chainlink.Application
 }
 
-func (s seededAppFactory) NewApplication(context.Context, chainlink.GeneralConfig, logger.Logger, *sqlx.DB) (chainlink.Application, error) {
+func (s seededAppFactory) NewApplication(context.Context, chainlink.GeneralConfig, logger.Logger, *sqlx.DB, cmd.TerminalKeyStoreAuthenticator) (chainlink.Application, error) {
 	return noopStopApplication{s.Application}, nil
 }
 
@@ -271,21 +285,6 @@ type MockCronEntry struct {
 	Function func()
 }
 
-// MockHeadTrackable allows you to mock HeadTrackable
-type MockHeadTrackable struct {
-	onNewHeadCount atomic.Int32
-}
-
-// OnNewLongestChain increases the OnNewLongestChainCount count by one
-func (m *MockHeadTrackable) OnNewLongestChain(context.Context, *evmtypes.Head) {
-	m.onNewHeadCount.Add(1)
-}
-
-// OnNewLongestChainCount returns the count of new heads, safely.
-func (m *MockHeadTrackable) OnNewLongestChainCount() int32 {
-	return m.onNewHeadCount.Load()
-}
-
 // NeverSleeper is a struct that never sleeps
 type NeverSleeper struct{}
 
@@ -312,10 +311,11 @@ func MustRandomUser(t testing.TB) sessions.User {
 }
 
 func NewUserWithSession(t testing.TB, orm sessions.AuthenticationProvider) sessions.User {
+	ctx := testutils.Context(t)
 	u := MustRandomUser(t)
-	require.NoError(t, orm.CreateUser(&u))
+	require.NoError(t, orm.CreateUser(ctx, &u))
 
-	_, err := orm.CreateSession(sessions.SessionRequest{
+	_, err := orm.CreateSession(ctx, sessions.SessionRequest{
 		Email:    u.Email,
 		Password: Password,
 	})
@@ -332,13 +332,13 @@ func NewMockAPIInitializer(t testing.TB) *MockAPIInitializer {
 	return &MockAPIInitializer{t: t}
 }
 
-func (m *MockAPIInitializer) Initialize(orm sessions.BasicAdminUsersORM, lggr logger.Logger) (sessions.User, error) {
-	if user, err := orm.FindUser(APIEmailAdmin); err == nil {
+func (m *MockAPIInitializer) Initialize(ctx context.Context, orm sessions.BasicAdminUsersORM, lggr logger.Logger) (sessions.User, error) {
+	if user, err := orm.FindUser(ctx, APIEmailAdmin); err == nil {
 		return user, err
 	}
 	m.Count++
 	user := MustRandomUser(m.t)
-	return user, orm.CreateUser(&user)
+	return user, orm.CreateUser(ctx, &user)
 }
 
 func NewMockAuthenticatedHTTPClient(lggr logger.Logger, cfg cmd.ClientOpts, sessionID string) cmd.HTTPClient {
@@ -406,9 +406,9 @@ func NewLegacyChainsWithMockChain(t testing.TB, ethClient evmclient.Client, cfg 
 	scopedCfg := evmtest.NewChainScopedConfig(t, cfg)
 	ch.On("ID").Return(scopedCfg.EVM().ChainID())
 	ch.On("Config").Return(scopedCfg)
+	ch.On("HeadTracker").Return(nil)
 
 	return NewLegacyChainsWithChain(ch, cfg)
-
 }
 
 func NewLegacyChainsWithMockChainAndTxManager(t testing.TB, ethClient evmclient.Client, cfg legacyevm.AppConfig, txm txmgr.TxManager) legacyevm.LegacyChainContainer {

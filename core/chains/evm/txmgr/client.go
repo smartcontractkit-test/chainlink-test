@@ -18,6 +18,7 @@ import (
 
 	commonclient "github.com/smartcontractkit/chainlink/v2/common/client"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/client"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas"
 	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 )
@@ -25,11 +26,12 @@ import (
 var _ TxmClient = (*evmTxmClient)(nil)
 
 type evmTxmClient struct {
-	client client.Client
+	client       client.Client
+	clientErrors config.ClientErrors
 }
 
-func NewEvmTxmClient(c client.Client) *evmTxmClient {
-	return &evmTxmClient{client: c}
+func NewEvmTxmClient(c client.Client, clientErrors config.ClientErrors) *evmTxmClient {
+	return &evmTxmClient{client: c, clientErrors: clientErrors}
 }
 
 func (c *evmTxmClient) PendingSequenceAt(ctx context.Context, addr common.Address) (evmtypes.Nonce, error) {
@@ -84,7 +86,7 @@ func (c *evmTxmClient) BatchSendTransactions(
 				return
 			}
 			sendErr := reqs[i].Error
-			codes[i] = client.ClassifySendError(sendErr, lggr, tx, attempts[i].Tx.FromAddress, c.client.IsL2())
+			codes[i] = client.ClassifySendError(sendErr, c.clientErrors, lggr, tx, attempts[i].Tx.FromAddress, c.client.IsL2())
 			txErrs[i] = sendErr
 		}(index)
 	}
@@ -115,7 +117,12 @@ func (c *evmTxmClient) PendingNonceAt(ctx context.Context, fromAddress common.Ad
 }
 
 func (c *evmTxmClient) SequenceAt(ctx context.Context, addr common.Address, blockNum *big.Int) (evmtypes.Nonce, error) {
-	return c.client.SequenceAt(ctx, addr, blockNum)
+	nonce, err := c.client.NonceAt(ctx, addr, blockNum)
+	if nonce > math.MaxInt64 {
+		return 0, fmt.Errorf("overflow for nonce: %d", nonce)
+	}
+	//nolint:gosec // disable G115
+	return evmtypes.Nonce(nonce), err
 }
 
 func (c *evmTxmClient) BatchGetReceipts(ctx context.Context, attempts []TxAttempt) (txReceipt []*evmtypes.Receipt, txErr []error, funcErr error) {
@@ -172,12 +179,16 @@ func (c *evmTxmClient) CallContract(ctx context.Context, a TxAttempt, blockNumbe
 		From:       a.Tx.FromAddress,
 		To:         &a.Tx.ToAddress,
 		Gas:        a.Tx.FeeLimit,
-		GasPrice:   a.TxFee.Legacy.ToInt(),
-		GasFeeCap:  a.TxFee.DynamicFeeCap.ToInt(),
-		GasTipCap:  a.TxFee.DynamicTipCap.ToInt(),
+		GasPrice:   a.TxFee.GasPrice.ToInt(),
+		GasFeeCap:  a.TxFee.GasFeeCap.ToInt(),
+		GasTipCap:  a.TxFee.GasTipCap.ToInt(),
 		Value:      nil,
 		Data:       a.Tx.EncodedPayload,
 		AccessList: nil,
 	}, blockNumber)
 	return client.ExtractRPCError(errCall)
+}
+
+func (c *evmTxmClient) HeadByHash(ctx context.Context, hash common.Hash) (*evmtypes.Head, error) {
+	return c.client.HeadByHash(ctx, hash)
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/types"
 	"github.com/smartcontractkit/chainlink-solana/pkg/solana/config"
 
-	"github.com/smartcontractkit/chainlink-solana/pkg/solana"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/configtest"
@@ -50,6 +49,7 @@ OCR2CacheTTL = '1m0s'
 TxTimeout = '1h0m0s'
 TxRetryTimeout = '10s'
 TxConfirmTimeout = '30s'
+TxRetentionTimeout = '0s'
 SkipPreflight = false
 Commitment = 'confirmed'
 MaxRetries = 0
@@ -58,7 +58,28 @@ ComputeUnitPriceMax = 1000
 ComputeUnitPriceMin = 0
 ComputeUnitPriceDefault = 0
 FeeBumpPeriod = '3s'
+BlockHistoryPollPeriod = '5s'
+BlockHistorySize = 1
+ComputeUnitLimitDefault = 200000
+EstimateComputeUnitLimit = false
 Nodes = []
+
+[MultiNode]
+Enabled = false
+PollFailureThreshold = 5
+PollInterval = '10s'
+SelectionMode = 'PriorityLevel'
+SyncThreshold = 5
+NodeIsSyncingEnabled = false
+LeaseDuration = '1m0s'
+FinalizedBlockPollInterval = '5s'
+EnforceRepeatableRead = true
+DeathDeclarationDelay = '10s'
+NodeNoNewHeadsThreshold = '10s'
+NoNewFinalizedHeadsThreshold = '10s'
+FinalityDepth = 0
+FinalityTagEnabled = true
+FinalizedBlockOffset = 0
 `,
 				}
 			},
@@ -80,7 +101,7 @@ Nodes = []
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			controller := setupSolanaChainsControllerTestV2(t, &solana.TOMLConfig{
+			controller := setupSolanaChainsControllerTestV2(t, &config.TOMLConfig{
 				ChainID: ptr(validId),
 				Chain: config.Chain{
 					SkipPreflight: ptr(false),
@@ -111,13 +132,13 @@ Nodes = []
 func Test_SolanaChainsController_Index(t *testing.T) {
 	t.Parallel()
 
-	chainA := &solana.TOMLConfig{
+	chainA := &config.TOMLConfig{
 		ChainID: ptr(fmt.Sprintf("ChainlinktestA-%d", rand.Int31n(999999))),
 		Chain: config.Chain{
 			TxTimeout: commoncfg.MustNewDuration(time.Hour),
 		},
 	}
-	chainB := &solana.TOMLConfig{
+	chainB := &config.TOMLConfig{
 		ChainID: ptr(fmt.Sprintf("ChainlinktestB-%d", rand.Int31n(999999))),
 		Chain: config.Chain{
 			SkipPreflight: ptr(false),
@@ -175,7 +196,7 @@ type TestSolanaChainsController struct {
 	client cltest.HTTPClientCleaner
 }
 
-func setupSolanaChainsControllerTestV2(t *testing.T, cfgs ...*solana.TOMLConfig) *TestSolanaChainsController {
+func setupSolanaChainsControllerTestV2(t *testing.T, cfgs ...*config.TOMLConfig) *TestSolanaChainsController {
 	for i := range cfgs {
 		cfgs[i].SetDefaults()
 	}

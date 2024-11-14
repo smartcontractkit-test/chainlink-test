@@ -10,6 +10,10 @@ import (
 
 	ragetypes "github.com/smartcontractkit/libocr/ragep2p/types"
 
+	commoncap "github.com/smartcontractkit/chainlink-common/pkg/capabilities"
+	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/pb"
+	"github.com/smartcontractkit/chainlink-common/pkg/values"
+
 	"github.com/smartcontractkit/chainlink/v2/core/capabilities/remote"
 	remotetypes "github.com/smartcontractkit/chainlink/v2/core/capabilities/remote/types"
 	p2ptypes "github.com/smartcontractkit/chainlink/v2/core/services/p2p/types"
@@ -18,7 +22,7 @@ import (
 const (
 	capId1   = "cap1"
 	capId2   = "cap2"
-	donId1   = "donA"
+	donId1   = uint32(1)
 	payload1 = "hello world"
 	payload2 = "goodbye world"
 )
@@ -54,13 +58,13 @@ func newKeyPair(t *testing.T) (ed25519.PrivateKey, ragetypes.PeerID) {
 	return privKey, peerID
 }
 
-func encodeAndSign(t *testing.T, senderPrivKey ed25519.PrivateKey, senderId p2ptypes.PeerID, receiverId p2ptypes.PeerID, capabilityId string, donId string, payload []byte) p2ptypes.Message {
+func encodeAndSign(t *testing.T, senderPrivKey ed25519.PrivateKey, senderId p2ptypes.PeerID, receiverId p2ptypes.PeerID, capabilityId string, donId uint32, payload []byte) p2ptypes.Message {
 	body := remotetypes.MessageBody{
-		Sender:       senderId[:],
-		Receiver:     receiverId[:],
-		CapabilityId: capabilityId,
-		DonId:        donId,
-		Payload:      payload,
+		Sender:          senderId[:],
+		Receiver:        receiverId[:],
+		CapabilityId:    capabilityId,
+		CapabilityDonId: donId,
+		Payload:         payload,
 	}
 	rawBody, err := proto.Marshal(&body)
 	require.NoError(t, err)
@@ -77,4 +81,56 @@ func encodeAndSign(t *testing.T, senderPrivKey ed25519.PrivateKey, senderId p2pt
 		Sender:  senderId,
 		Payload: rawMsg,
 	}
+}
+
+func TestToPeerID(t *testing.T) {
+	id, err := remote.ToPeerID([]byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	require.Equal(t, "12D3KooWD8QYTQVYjB6oog4Ej8PcPpqTrPRnxLQap8yY8KUQRVvq", id.String())
+}
+
+func TestDefaultModeAggregator_Aggregate(t *testing.T) {
+	val, err := values.NewMap(triggerEvent1)
+	require.NoError(t, err)
+	capResponse1 := commoncap.TriggerResponse{
+		Event: commoncap.TriggerEvent{
+			Outputs: val,
+		},
+		Err: nil,
+	}
+	marshaled1, err := pb.MarshalTriggerResponse(capResponse1)
+	require.NoError(t, err)
+
+	val2, err := values.NewMap(triggerEvent2)
+	require.NoError(t, err)
+	capResponse2 := commoncap.TriggerResponse{
+		Event: commoncap.TriggerEvent{
+			Outputs: val2,
+		},
+		Err: nil,
+	}
+	marshaled2, err := pb.MarshalTriggerResponse(capResponse2)
+	require.NoError(t, err)
+
+	agg := remote.NewDefaultModeAggregator(2)
+	_, err = agg.Aggregate("", [][]byte{marshaled1})
+	require.Error(t, err)
+
+	_, err = agg.Aggregate("", [][]byte{marshaled1, marshaled2})
+	require.Error(t, err)
+
+	res, err := agg.Aggregate("", [][]byte{marshaled1, marshaled2, marshaled1})
+	require.NoError(t, err)
+	require.Equal(t, res, capResponse1)
+}
+
+func TestSanitizeLogString(t *testing.T) {
+	require.Equal(t, "hello", remote.SanitizeLogString("hello"))
+	require.Equal(t, "[UNPRINTABLE] 0a", remote.SanitizeLogString("\n"))
+
+	longString := ""
+	for i := 0; i < 100; i++ {
+		longString += "aa-aa-aa-"
+	}
+	require.Equal(t, longString[:256]+" [TRUNCATED]", remote.SanitizeLogString(longString))
 }

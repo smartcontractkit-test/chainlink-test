@@ -26,14 +26,13 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/ethkey"
-	evmrelay "github.com/smartcontractkit/chainlink/v2/core/services/relay/evm"
 )
 
 func TestDelegate_JobType(t *testing.T) {
 	t.Parallel()
 
 	lggr := logger.TestLogger(t)
-	delegate := blockhashstore.NewDelegate(lggr, nil, nil)
+	delegate := blockhashstore.NewDelegate(nil, lggr, nil, nil)
 
 	assert.Equal(t, job.BlockhashStore, delegate.JobType())
 }
@@ -55,13 +54,13 @@ func createTestDelegate(t *testing.T) (*blockhashstore.Delegate, *testData) {
 		c.Feature.LogPoller = func(b bool) *bool { return &b }(true)
 	})
 	db := pgtest.NewSqlxDB(t)
-	kst := cltest.NewKeyStore(t, db, cfg.Database()).Eth()
+	kst := cltest.NewKeyStore(t, db).Eth()
 	sendingKey, _ := cltest.MustInsertRandomKey(t, kst)
 	lp := &mocklp.LogPoller{}
 	lp.On("RegisterFilter", mock.Anything, mock.Anything).Return(nil)
 	lp.On("LatestBlock", mock.Anything).Return(logpoller.LogPollerBlock{}, nil)
 
-	relayExtenders := evmtest.NewChainRelayExtenders(
+	legacyChains := evmtest.NewLegacyChains(
 		t,
 		evmtest.TestChainOpts{
 			DB:            db,
@@ -71,8 +70,7 @@ func createTestDelegate(t *testing.T) (*blockhashstore.Delegate, *testData) {
 			LogPoller:     lp,
 		},
 	)
-	legacyChains := evmrelay.NewLegacyChainsFromRelayerExtenders(relayExtenders)
-	return blockhashstore.NewDelegate(lggr, legacyChains, kst), &testData{
+	return blockhashstore.NewDelegate(cfg, lggr, legacyChains, kst), &testData{
 		ethClient:    ethClient,
 		ethKeyStore:  kst,
 		legacyChains: legacyChains,
@@ -163,7 +161,7 @@ func TestDelegate_StartStop(t *testing.T) {
 	err = services[0].Start(testutils.Context(t))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	require.Eventually(t, func() bool {
 		return testData.logs.FilterMessage("Starting BHS feeder").Len() > 0 &&
 			testData.logs.FilterMessage("Running BHS feeder").Len() > 0 &&
 			testData.logs.FilterMessage("BHS feeder run completed successfully").Len() > 0

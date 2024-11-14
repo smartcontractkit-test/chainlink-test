@@ -37,3 +37,17 @@ func (n *NodePoolConfig) NodeIsSyncingEnabled() bool {
 func (n *NodePoolConfig) FinalizedBlockPollInterval() time.Duration {
 	return n.C.FinalizedBlockPollInterval.Duration()
 }
+
+func (n *NodePoolConfig) NewHeadsPollInterval() time.Duration {
+	return n.C.NewHeadsPollInterval.Duration()
+}
+
+func (n *NodePoolConfig) Errors() ClientErrors { return &clientErrorsConfig{c: n.C.Errors} }
+
+func (n *NodePoolConfig) EnforceRepeatableRead() bool {
+	return *n.C.EnforceRepeatableRead
+}
+
+func (n *NodePoolConfig) DeathDeclarationDelay() time.Duration {
+	return n.C.DeathDeclarationDelay.Duration()
+}

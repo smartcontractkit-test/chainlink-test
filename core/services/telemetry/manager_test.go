@@ -64,7 +64,6 @@ func TestManagerAgents(t *testing.T) {
 }
 
 func TestNewManager(t *testing.T) {
-
 	type endpointTest struct {
 		network       string
 		chainID       string
@@ -79,21 +78,21 @@ func TestNewManager(t *testing.T) {
 			network:     "NETWORK-1",
 			chainID:     "NETWORK-1-CHAINID-1",
 			url:         "http://network-1-chainID-1.test",
-			pubKey:      "network-1-chainID-1-pub-key",
+			pubKey:      GetDummyKeyStringWithPrefix("network-1-chainID-1-pub-key"),
 			shouldError: false,
 		},
 		{
 			network:     "NETWORK-1",
 			chainID:     "NETWORK-1-CHAINID-2",
 			url:         "http://network-1-chainID-2.test",
-			pubKey:      "network-1-chainID-2-pub-key",
+			pubKey:      GetDummyKeyStringWithPrefix("network-1-chainID-2-pub-key"),
 			shouldError: false,
 		},
 		{
 			network:     "NETWORK-2",
 			chainID:     "NETWORK-2-CHAINID-1",
 			url:         "http://network-2-chainID-1.test",
-			pubKey:      "network-2-chainID-1-pub-key",
+			pubKey:      GetDummyKeyStringWithPrefix("network-2-chainID-1-pub-key"),
 			shouldError: false,
 		},
 		{
@@ -122,7 +121,7 @@ func TestNewManager(t *testing.T) {
 			network:       "NETWORK-1",
 			chainID:       "NETWORK-1-CHAINID-1",
 			url:           "http://network-1-chainID-1.test",
-			pubKey:        "network-1-chainID-1-pub-key",
+			pubKey:        GetDummyKeyStringWithPrefix("network-1-chainID-1-pub-key"),
 			shouldError:   true,
 			expectedError: "endpoint already exists",
 		},
@@ -157,7 +156,7 @@ func TestNewManager(t *testing.T) {
 
 	require.Equal(t, uint(123), m.bufferSize)
 	require.Equal(t, ks, m.ks)
-	require.Equal(t, "TelemetryManager", m.lggr.Name())
+	require.Equal(t, "TelemetryManager", m.Name())
 	require.Equal(t, true, m.logging)
 	require.Equal(t, uint(51), m.maxBatchSize)
 	require.Equal(t, time.Millisecond*512, m.sendInterval)
@@ -181,7 +180,6 @@ func TestNewManager(t *testing.T) {
 			}
 			require.Equal(t, true, found, "cannot find log: %s", e.expectedError)
 		}
-
 	}
 
 	require.Equal(t, "TelemetryManager", m.Name())
@@ -246,9 +244,8 @@ func TestCorrectEndpointRouting(t *testing.T) {
 			Network: e.network,
 			client:  clientMock,
 		}
-
 	}
-	//Unknown networks or chainID
+	// Unknown networks or chainID
 	noopEndpoint := tm.GenMonitoringEndpoint("unknown-network", "unknown-chainID", "some-contractID", "some-type")
 	require.Equal(t, "*telemetry.NoopAgent", reflect.TypeOf(noopEndpoint).String())
 	require.Equal(t, 1, obsLogs.Len())
@@ -264,7 +261,7 @@ func TestCorrectEndpointRouting(t *testing.T) {
 	require.Equal(t, 1, obsLogs.Len())
 	require.Contains(t, obsLogs.TakeAll()[0].Message, "no telemetry endpoint found")
 
-	//Known networks and chainID
+	// Known networks and chainID
 	for i, e := range testEndpoints {
 		telemType := fmt.Sprintf("TelemType_%s", e.chainID)
 		contractID := fmt.Sprintf("contractID_%s", e.chainID)
@@ -282,5 +279,4 @@ func TestCorrectEndpointRouting(t *testing.T) {
 		require.Equal(t, telemType, string(clientSent[i].TelemType))
 		require.Equal(t, []byte(e.chainID), clientSent[i].Telemetry)
 	}
-
 }

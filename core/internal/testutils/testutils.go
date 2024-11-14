@@ -24,15 +24,14 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/jmoiron/sqlx"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	// NOTE: To avoid circular dependencies, this package MUST NOT import
 	// anything from "github.com/smartcontractkit/chainlink/v2/core"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 )
 
 const (
@@ -61,11 +60,6 @@ func MustNewSimTransactor(t testing.TB) *bind.TransactOpts {
 // NewAddress return a random new address
 func NewAddress() common.Address {
 	return common.BytesToAddress(randomBytes(20))
-}
-
-func NewAddressPtr() *common.Address {
-	a := common.BytesToAddress(randomBytes(20))
-	return &a
 }
 
 // NewPrivateKeyAndAddress returns a new private key and the corresponding address
@@ -127,12 +121,6 @@ func WaitTimeout(t *testing.T) time.Duration {
 		return time.Until(d) * 9 / 10
 	}
 	return DefaultWaitTimeout
-}
-
-// AfterWaitTimeout returns a channel that will send a time value when the
-// WaitTimeout is reached
-func AfterWaitTimeout(t *testing.T) <-chan time.Time {
-	return time.After(WaitTimeout(t))
 }
 
 // Context returns a context with the test's deadline, if available.
@@ -354,9 +342,14 @@ func IntToHex(n int) string {
 // risk of spamming
 const TestInterval = 100 * time.Millisecond
 
-// AssertEventually waits for f to return true
-func AssertEventually(t *testing.T, f func() bool) {
-	assert.Eventually(t, f, WaitTimeout(t), TestInterval/2)
+// AssertEventually calls assert.Eventually with default wait and tick durations.
+func AssertEventually(t *testing.T, f func() bool) bool {
+	return assert.Eventually(t, f, WaitTimeout(t), TestInterval/2)
+}
+
+// RequireEventually calls assert.Eventually with default wait and tick durations.
+func RequireEventually(t *testing.T, f func() bool) {
+	require.Eventually(t, f, WaitTimeout(t), TestInterval/2)
 }
 
 // RequireLogMessage fails the test if emitted logs don't contain the given message
@@ -379,21 +372,36 @@ func RequireLogMessage(t *testing.T, observedLogs *observer.ObservedLogs, msg st
 //
 //	observedZapCore, observedLogs := observer.New(zap.DebugLevel)
 //	lggr := logger.TestLogger(t, observedZapCore)
-func WaitForLogMessage(t *testing.T, observedLogs *observer.ObservedLogs, msg string) {
-	AssertEventually(t, func() bool {
+func WaitForLogMessage(t *testing.T, observedLogs *observer.ObservedLogs, msg string) (le observer.LoggedEntry) {
+	RequireEventually(t, func() bool {
 		for _, l := range observedLogs.All() {
 			if strings.Contains(l.Message, msg) {
+				le = l
 				return true
 			}
 		}
 		return false
 	})
+	return
+}
+
+func WaitForLogMessageWithField(t *testing.T, observedLogs *observer.ObservedLogs, msg, field, value string) (le observer.LoggedEntry) {
+	RequireEventually(t, func() bool {
+		for _, l := range observedLogs.All() {
+			if strings.Contains(l.Message, msg) && strings.Contains(l.ContextMap()[field].(string), value) {
+				le = l
+				return true
+			}
+		}
+		return false
+	})
+	return
 }
 
 // WaitForLogMessageCount waits until at least count log message containing the
 // specified msg is emitted
 func WaitForLogMessageCount(t *testing.T, observedLogs *observer.ObservedLogs, msg string, count int) {
-	AssertEventually(t, func() bool {
+	RequireEventually(t, func() bool {
 		i := 0
 		for _, l := range observedLogs.All() {
 			if strings.Contains(l.Message, msg) {
@@ -419,10 +427,11 @@ func SkipShortDB(tb testing.TB) {
 	SkipShort(tb, "DB dependency")
 }
 
-func AssertCount(t *testing.T, db *sqlx.DB, tableName string, expected int64) {
+func AssertCount(t *testing.T, ds sqlutil.DataSource, tableName string, expected int64) {
 	t.Helper()
+	ctx := Context(t)
 	var count int64
-	err := db.Get(&count, fmt.Sprintf(`SELECT count(*) FROM %s;`, tableName))
+	err := ds.GetContext(ctx, &count, fmt.Sprintf(`SELECT count(*) FROM %s;`, tableName))
 	require.NoError(t, err)
 	require.Equal(t, expected, count)
 }

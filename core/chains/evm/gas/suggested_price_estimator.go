@@ -12,13 +12,13 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils"
 	bigmath "github.com/smartcontractkit/chainlink-common/pkg/utils/big_math"
+	commonclient "github.com/smartcontractkit/chainlink/v2/common/client"
 
 	"github.com/smartcontractkit/chainlink/v2/common/fee"
 	feetypes "github.com/smartcontractkit/chainlink/v2/common/fee/types"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
-	evmclient "github.com/smartcontractkit/chainlink/v2/core/chains/evm/client"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas/rollups"
 	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 )
 
@@ -31,8 +31,7 @@ type suggestedPriceConfig interface {
 	BumpMin() *assets.Wei
 }
 
-//go:generate mockery --quiet --name rpcClient --output ./mocks/ --case=underscore --structname RPCClient
-type rpcClient interface {
+type suggestedPriceEstimatorClient interface {
 	CallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error
 }
 
@@ -41,7 +40,7 @@ type SuggestedPriceEstimator struct {
 	services.StateMachine
 
 	cfg        suggestedPriceConfig
-	client     rpcClient
+	client     suggestedPriceEstimatorClient
 	pollPeriod time.Duration
 	logger     logger.Logger
 
@@ -52,10 +51,12 @@ type SuggestedPriceEstimator struct {
 	chInitialised  chan struct{}
 	chStop         services.StopChan
 	chDone         chan struct{}
+
+	l1Oracle rollups.L1Oracle
 }
 
 // NewSuggestedPriceEstimator returns a new Estimator which uses the suggested gas price.
-func NewSuggestedPriceEstimator(lggr logger.Logger, client rpcClient, cfg suggestedPriceConfig) EvmEstimator {
+func NewSuggestedPriceEstimator(lggr logger.Logger, client feeEstimatorClient, cfg suggestedPriceConfig, l1Oracle rollups.L1Oracle) EvmEstimator {
 	return &SuggestedPriceEstimator{
 		client:         client,
 		pollPeriod:     10 * time.Second,
@@ -65,11 +66,16 @@ func NewSuggestedPriceEstimator(lggr logger.Logger, client rpcClient, cfg sugges
 		chInitialised:  make(chan struct{}),
 		chStop:         make(chan struct{}),
 		chDone:         make(chan struct{}),
+		l1Oracle:       l1Oracle,
 	}
 }
 
 func (o *SuggestedPriceEstimator) Name() string {
 	return o.logger.Name()
+}
+
+func (o *SuggestedPriceEstimator) L1Oracle() rollups.L1Oracle {
+	return o.l1Oracle
 }
 
 func (o *SuggestedPriceEstimator) Start(context.Context) error {
@@ -94,28 +100,31 @@ func (o *SuggestedPriceEstimator) HealthReport() map[string]error {
 func (o *SuggestedPriceEstimator) run() {
 	defer close(o.chDone)
 
-	t := o.refreshPrice()
+	o.refreshPrice()
 	close(o.chInitialised)
+
+	t := services.TickerConfig{
+		Initial:   o.pollPeriod,
+		JitterPct: services.DefaultJitter,
+	}.NewTicker(o.pollPeriod)
 
 	for {
 		select {
 		case <-o.chStop:
 			return
 		case ch := <-o.chForceRefetch:
-			t.Stop()
-			t = o.refreshPrice()
+			o.refreshPrice()
+			t.Reset()
 			close(ch)
 		case <-t.C:
-			t = o.refreshPrice()
+			o.refreshPrice()
 		}
 	}
 }
 
-func (o *SuggestedPriceEstimator) refreshPrice() (t *time.Timer) {
-	t = time.NewTimer(utils.WithJitter(o.pollPeriod))
-
+func (o *SuggestedPriceEstimator) refreshPrice() {
 	var res hexutil.Big
-	ctx, cancel := o.chStop.CtxCancel(evmclient.ContextWithDefaultTimeout())
+	ctx, cancel := o.chStop.CtxWithTimeout(commonclient.QueryTimeout)
 	defer cancel()
 
 	if err := o.client.CallContext(ctx, &res, "eth_gasPrice"); err != nil {
@@ -129,7 +138,6 @@ func (o *SuggestedPriceEstimator) refreshPrice() (t *time.Timer) {
 	o.gasPriceMu.Lock()
 	defer o.gasPriceMu.Unlock()
 	o.GasPrice = bi
-	return
 }
 
 // Uses the force refetch chan to trigger a price update and blocks until complete
@@ -206,7 +214,7 @@ func (o *SuggestedPriceEstimator) BumpLegacyGas(ctx context.Context, originalFee
 			err = pkgerrors.New("failed to refresh and return gas; gas price not set")
 			return
 		}
-		o.logger.Debugw("GasPrice", newGasPrice, "GasLimit", feeLimit)
+		o.logger.Debugw("BumpLegacyGas", "GasPrice", newGasPrice, "GasLimit", feeLimit)
 	})
 	if !ok {
 		return nil, 0, pkgerrors.New("estimator is not started")

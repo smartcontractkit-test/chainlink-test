@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink/v2/common/config"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 )
@@ -16,8 +15,8 @@ func init() {
 	MaxStartTime = 1 * time.Second
 }
 
-func (b *BlockHistoryEstimator) CheckConnectivity(attempts []EvmPriorAttempt) error {
-	return b.checkConnectivity(attempts)
+func (b *BlockHistoryEstimator) HaltBumping(attempts []EvmPriorAttempt) error {
+	return b.haltBumping(attempts)
 }
 
 func BlockHistoryEstimatorFromInterface(bhe EvmEstimator) *BlockHistoryEstimator {
@@ -52,10 +51,22 @@ func GetGasPrice(b *BlockHistoryEstimator) *assets.Wei {
 	return b.gasPrice
 }
 
+func GetMaxPercentileGasPrice(b *BlockHistoryEstimator) *assets.Wei {
+	b.maxPriceMu.RLock()
+	defer b.maxPriceMu.RUnlock()
+	return b.maxPercentileGasPrice
+}
+
 func GetTipCap(b *BlockHistoryEstimator) *assets.Wei {
 	b.priceMu.RLock()
 	defer b.priceMu.RUnlock()
 	return b.tipCap
+}
+
+func GetMaxPercentileTipCap(b *BlockHistoryEstimator) *assets.Wei {
+	b.maxPriceMu.RLock()
+	defer b.maxPriceMu.RUnlock()
+	return b.maxPercentileTipCap
 }
 
 func GetLatestBaseFee(b *BlockHistoryEstimator) *assets.Wei {
@@ -110,27 +121,6 @@ func (m *MockBlockHistoryConfig) TransactionPercentile() uint16 {
 	return m.TransactionPercentileF
 }
 
-type MockConfig struct {
-	ChainTypeF          string
-	FinalityTagEnabledF bool
-}
-
-func NewMockConfig() *MockConfig {
-	return &MockConfig{}
-}
-
-func (m *MockConfig) ChainType() config.ChainType {
-	return config.ChainType(m.ChainTypeF)
-}
-
-func (m *MockConfig) FinalityDepth() uint32 {
-	panic("not implemented") // TODO: Implement
-}
-
-func (m *MockConfig) FinalityTagEnabled() bool {
-	return m.FinalityTagEnabledF
-}
-
 type MockGasEstimatorConfig struct {
 	EIP1559DynamicFeesF bool
 	BumpPercentF        uint16
@@ -145,6 +135,7 @@ type MockGasEstimatorConfig struct {
 	FeeCapDefaultF      *assets.Wei
 	LimitMaxF           uint64
 	ModeF               string
+	EstimateLimitF      bool
 }
 
 func NewMockGasConfig() *MockGasEstimatorConfig {
@@ -201,4 +192,8 @@ func (m *MockGasEstimatorConfig) LimitMax() uint64 {
 
 func (m *MockGasEstimatorConfig) Mode() string {
 	return m.ModeF
+}
+
+func (m *MockGasEstimatorConfig) EstimateLimit() bool {
+	return m.EstimateLimitF
 }

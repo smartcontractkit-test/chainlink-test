@@ -13,12 +13,12 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	clientmock "github.com/smartcontractkit/chainlink/v2/core/chains/evm/client/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
 	txstoremock "github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/pgtest"
 )
@@ -26,14 +26,14 @@ import (
 func TestNonceTracker_LoadSequenceMap(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	txStore := txstoremock.NewEvmTxStore(t)
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr1 := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 	addr2 := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781140")
@@ -61,8 +61,8 @@ func TestNonceTracker_LoadSequenceMap(t *testing.T) {
 
 		randNonce1 := testutils.NewRandomPositiveInt64()
 		randNonce2 := testutils.NewRandomPositiveInt64()
-		client.On("PendingNonceAt", mock.Anything, addr1).Return(uint64(randNonce1), nil).Once()
-		client.On("PendingNonceAt", mock.Anything, addr2).Return(uint64(randNonce2), nil).Once()
+		client.On("NonceAt", mock.Anything, addr1, mock.Anything).Return(uint64(randNonce1), nil).Once() //nolint:gosec // Disable G115: randNonce1 always positive
+		client.On("NonceAt", mock.Anything, addr2, mock.Anything).Return(uint64(randNonce2), nil).Once() //nolint:gosec // Disable G115: randNonce2 always positive
 
 		nonceTracker.LoadNextSequences(ctx, enabledAddresses)
 		seq, err := nonceTracker.GetNextSequence(ctx, addr1)
@@ -72,20 +72,19 @@ func TestNonceTracker_LoadSequenceMap(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.Nonce(randNonce2), seq)
 	})
-
 }
 
 func TestNonceTracker_syncOnChain(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	txStore := txstoremock.NewEvmTxStore(t)
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 
@@ -129,20 +128,19 @@ func TestNonceTracker_syncOnChain(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.Nonce(nonce), seq)
 	})
-
 }
 
 func TestNonceTracker_SyncSequence(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	txStore := txstoremock.NewEvmTxStore(t)
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 	enabledAddresses := []common.Address{addr}
@@ -182,21 +180,20 @@ func TestNonceTracker_SyncSequence(t *testing.T) {
 func TestNonceTracker_GetNextSequence(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	txStore := txstoremock.NewEvmTxStore(t)
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 
 	t.Run("fails to get sequence if address doesn't exist in map", func(t *testing.T) {
 		_, err := nonceTracker.GetNextSequence(ctx, addr)
 		require.Error(t, err)
-
 	})
 
 	t.Run("fails to get sequence if address doesn't exist in map and is disabled", func(t *testing.T) {
@@ -208,7 +205,7 @@ func TestNonceTracker_GetNextSequence(t *testing.T) {
 	t.Run("fails to get sequence if address is enabled, doesn't exist in map, and getSequenceForAddr fails", func(t *testing.T) {
 		enabledAddresses := []common.Address{addr}
 		txStore.On("FindLatestSequence", mock.Anything, addr, chainID).Return(types.Nonce(0), errors.New("no rows")).Twice()
-		client.On("PendingNonceAt", mock.Anything, addr).Return(uint64(0), errors.New("RPC unavailable")).Twice()
+		client.On("NonceAt", mock.Anything, addr, mock.Anything).Return(uint64(0), errors.New("RPC unavailable")).Twice()
 		nonceTracker.LoadNextSequences(ctx, enabledAddresses)
 
 		_, err := nonceTracker.GetNextSequence(ctx, addr)
@@ -220,28 +217,27 @@ func TestNonceTracker_GetNextSequence(t *testing.T) {
 		txStoreNonce := 4
 		enabledAddresses := []common.Address{addr}
 		txStore.On("FindLatestSequence", mock.Anything, addr, chainID).Return(types.Nonce(0), errors.New("no rows")).Once()
-		client.On("PendingNonceAt", mock.Anything, addr).Return(uint64(0), errors.New("RPC unavailable")).Once()
+		client.On("NonceAt", mock.Anything, addr, mock.Anything).Return(uint64(0), errors.New("RPC unavailable")).Once()
 		nonceTracker.LoadNextSequences(ctx, enabledAddresses)
 
 		txStore.On("FindLatestSequence", mock.Anything, addr, chainID).Return(types.Nonce(txStoreNonce), nil).Once()
 		seq, err := nonceTracker.GetNextSequence(ctx, addr)
 		require.NoError(t, err)
 		require.Equal(t, types.Nonce(txStoreNonce+1), seq)
-
 	})
 }
 
 func TestNonceTracker_GenerateNextSequence(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	txStore := txstoremock.NewEvmTxStore(t)
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 	enabledAddresses := []common.Address{addr}
@@ -263,21 +259,21 @@ func TestNonceTracker_GenerateNextSequence(t *testing.T) {
 func Test_SetNonceAfterInit(t *testing.T) {
 	t.Parallel()
 
-	ctx := testutils.Context(t)
+	ctx := tests.Context(t)
 	chainID := big.NewInt(0)
 	db := pgtest.NewSqlxDB(t)
-	txStore := cltest.NewTestTxStore(t, db)
+	txStore := txmgr.NewTxStore(db, logger.Test(t))
 
 	client := clientmock.NewClient(t)
 	client.On("ConfiguredChainID").Return(chainID)
 
-	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client))
+	nonceTracker := txmgr.NewNonceTracker(logger.Test(t), txStore, txmgr.NewEvmTxmClient(client, nil))
 
 	addr := common.HexToAddress("0xd5e099c71b797516c10ed0f0d895f429c2781142")
 	enabledAddresses := []common.Address{addr}
 	randNonce := testutils.NewRandomPositiveInt64()
-	client.On("PendingNonceAt", mock.Anything, addr).Return(uint64(0), errors.New("failed to retrieve nonce at startup")).Once()
-	client.On("PendingNonceAt", mock.Anything, addr).Return(uint64(randNonce), nil).Once()
+	client.On("NonceAt", mock.Anything, addr, mock.Anything).Return(uint64(0), errors.New("failed to retrieve nonce at startup")).Once()
+	client.On("NonceAt", mock.Anything, addr, mock.Anything).Return(uint64(randNonce), nil).Once() //nolint:gosec // Disable G115: randNonce always positive
 	nonceTracker.LoadNextSequences(ctx, enabledAddresses)
 
 	nonce, err := nonceTracker.GetNextSequence(ctx, addr)

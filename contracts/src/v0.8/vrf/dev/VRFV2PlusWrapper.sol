@@ -9,7 +9,6 @@ import {AggregatorV3Interface} from "../../shared/interfaces/AggregatorV3Interfa
 import {VRFV2PlusClient} from "./libraries/VRFV2PlusClient.sol";
 import {IVRFV2PlusWrapper} from "./interfaces/IVRFV2PlusWrapper.sol";
 import {VRFV2PlusWrapperConsumerBase} from "./VRFV2PlusWrapperConsumerBase.sol";
-import {ChainSpecificUtil} from "../../ChainSpecificUtil.sol";
 
 /**
  * @notice A wrapper for VRFCoordinatorV2 that provides an interface better suited to one-off
@@ -31,6 +30,27 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
   uint256 public immutable SUBSCRIPTION_ID;
   LinkTokenInterface internal immutable i_link;
   AggregatorV3Interface internal immutable i_link_native_feed;
+
+  event FulfillmentTxSizeSet(uint32 size);
+  event ConfigSet(
+    uint32 wrapperGasOverhead,
+    uint32 coordinatorGasOverheadNative,
+    uint32 coordinatorGasOverheadLink,
+    uint16 coordinatorGasOverheadPerWord,
+    uint8 coordinatorNativePremiumPercentage,
+    uint8 coordinatorLinkPremiumPercentage,
+    bytes32 keyHash,
+    uint8 maxNumWords,
+    uint32 stalenessSeconds,
+    int256 fallbackWeiPerUnitLink,
+    uint32 fulfillmentFlatFeeNativePPM,
+    uint32 fulfillmentFlatFeeLinkDiscountPPM
+  );
+  event FallbackWeiPerUnitLinkUsed(uint256 requestId, int256 fallbackWeiPerUnitLink);
+  event Withdrawn(address indexed to, uint256 amount);
+  event NativeWithdrawn(address indexed to, uint256 amount);
+  event Enabled();
+  event Disabled();
 
   error LinkAlreadySet();
   error LinkDiscountTooHigh(uint32 flatFeeLinkDiscountPPM, uint32 flatFeeNativePPM);
@@ -85,21 +105,30 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
   // function. The cost for this gas is passed to the user.
   uint32 private s_wrapperGasOverhead;
 
-  // Configuration fetched from VRFCoordinatorV2
+  // Configuration fetched from VRFCoordinatorV2_5
 
-  /// @dev this is the size of a VRF v2 fulfillment's calldata abi-encoded in bytes.
+  /// @dev this is the size of a VRF v2plus fulfillment's calldata abi-encoded in bytes.
   /// @dev proofSize = 13 words = 13 * 256 = 3328 bits
-  /// @dev commitmentSize = 5 words = 5 * 256 = 1280 bits
-  /// @dev dataSize = proofSize + commitmentSize = 4608 bits
-  /// @dev selector = 32 bits
-  /// @dev total data size = 4608 bits + 32 bits = 4640 bits = 580 bytes
-  uint32 public s_fulfillmentTxSizeBytes = 580;
+  /// @dev commitmentSize = 10 words = 10 * 256 = 2560 bits
+  /// @dev onlyPremiumParameterSize = 256 bits
+  /// @dev dataSize = proofSize + commitmentSize + onlyPremiumParameterSize = 6144 bits
+  /// @dev function selector = 32 bits
+  /// @dev total data size = 6144 bits + 32 bits = 6176 bits = 772 bytes
+  uint32 public s_fulfillmentTxSizeBytes = 772;
 
-  // s_coordinatorGasOverhead reflects the gas overhead of the coordinator's fulfillRandomWords
-  // function. The cost for this gas is billed to the subscription, and must therefor be included
+  // s_coordinatorGasOverheadNative reflects the gas overhead of the coordinator's fulfillRandomWords
+  // function for native payment. The cost for this gas is billed to the subscription, and must therefor be included
   // in the pricing for wrapped requests. This includes the gas costs of proof verification and
   // payment calculation in the coordinator.
-  uint32 private s_coordinatorGasOverhead;
+  uint32 private s_coordinatorGasOverheadNative;
+
+  // s_coordinatorGasOverheadLink reflects the gas overhead of the coordinator's fulfillRandomWords
+  // function for link payment. The cost for this gas is billed to the subscription, and must therefor be included
+  // in the pricing for wrapped requests. This includes the gas costs of proof verification and
+  // payment calculation in the coordinator.
+  uint32 private s_coordinatorGasOverheadLink;
+
+  uint16 private s_coordinatorGasOverheadPerWord;
 
   // s_fulfillmentFlatFeeLinkPPM is the flat fee in millionths of native that VRFCoordinatorV2
   // charges for native payment.
@@ -118,8 +147,6 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
   // value of 0 indicates no premium. A value of 15 indicates a 15 percent premium.
   // Wrapper has no premium. This premium is for VRFCoordinator.
   uint8 private s_coordinatorLinkPremiumPercentage;
-
-  // 6 bytes left
   /* Storage Slot 5: END */
 
   struct Callback {
@@ -161,12 +188,12 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
 
   /**
    * @notice setFulfillmentTxSize sets the size of the fulfillment transaction in bytes.
-   * @param size is the size of the fulfillment transaction in bytes.
+   * @param _size is the size of the fulfillment transaction in bytes.
    */
-  function setFulfillmentTxSize(uint32 size) external onlyOwner {
-    s_fulfillmentTxSizeBytes = size;
+  function setFulfillmentTxSize(uint32 _size) external onlyOwner {
+    s_fulfillmentTxSizeBytes = _size;
 
-    emit FulfillmentTxSizeSet(size);
+    emit FulfillmentTxSizeSet(_size);
   }
 
   /**
@@ -178,7 +205,13 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    * @param _wrapperGasOverhead reflects the gas overhead of the wrapper's fulfillRandomWords
    *        function.
    *
-   * @param _coordinatorGasOverhead reflects the gas overhead of the coordinator's
+   * @param _coordinatorGasOverheadNative reflects the gas overhead of the coordinator's
+   *        fulfillRandomWords function for native payment.
+   *
+   * @param _coordinatorGasOverheadLink reflects the gas overhead of the coordinator's
+   *        fulfillRandomWords function for link payment.
+   *
+   * @param _coordinatorGasOverheadPerWord reflects the gas overhead per word of the coordinator's
    *        fulfillRandomWords function.
    *
    * @param _coordinatorNativePremiumPercentage is the coordinator's premium ratio in percentage for requests paid in native.
@@ -199,9 +232,12 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    * @param _fulfillmentFlatFeeLinkDiscountPPM is the flat fee discount in millionths of native that VRFCoordinatorV2Plus
    *        charges for link payment.
    */
+  /// @dev This function while having only 12 parameters is causing a Stack too deep error when running forge coverage.
   function setConfig(
     uint32 _wrapperGasOverhead,
-    uint32 _coordinatorGasOverhead,
+    uint32 _coordinatorGasOverheadNative,
+    uint32 _coordinatorGasOverheadLink,
+    uint16 _coordinatorGasOverheadPerWord,
     uint8 _coordinatorNativePremiumPercentage,
     uint8 _coordinatorLinkPremiumPercentage,
     bytes32 _keyHash,
@@ -222,7 +258,9 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
     }
 
     s_wrapperGasOverhead = _wrapperGasOverhead;
-    s_coordinatorGasOverhead = _coordinatorGasOverhead;
+    s_coordinatorGasOverheadNative = _coordinatorGasOverheadNative;
+    s_coordinatorGasOverheadLink = _coordinatorGasOverheadLink;
+    s_coordinatorGasOverheadPerWord = _coordinatorGasOverheadPerWord;
     s_coordinatorNativePremiumPercentage = _coordinatorNativePremiumPercentage;
     s_coordinatorLinkPremiumPercentage = _coordinatorLinkPremiumPercentage;
     s_keyHash = _keyHash;
@@ -237,7 +275,9 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
 
     emit ConfigSet(
       _wrapperGasOverhead,
-      _coordinatorGasOverhead,
+      _coordinatorGasOverheadNative,
+      _coordinatorGasOverheadLink,
+      _coordinatorGasOverheadPerWord,
       _coordinatorNativePremiumPercentage,
       _coordinatorLinkPremiumPercentage,
       _keyHash,
@@ -267,7 +307,13 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    * @return wrapperGasOverhead reflects the gas overhead of the wrapper's fulfillRandomWords
    *         function. The cost for this gas is passed to the user.
    *
-   * @return coordinatorGasOverhead reflects the gas overhead of the coordinator's
+   * @return coordinatorGasOverheadNative reflects the gas overhead of the coordinator's
+   *         fulfillRandomWords function for native payment.
+   *
+   * @return coordinatorGasOverheadLink reflects the gas overhead of the coordinator's
+   *         fulfillRandomWords function for link payment.
+   *
+   * @return coordinatorGasOverheadPerWord reflects the gas overhead per word of the coordinator's
    *         fulfillRandomWords function.
    *
    * @return wrapperNativePremiumPercentage is the premium ratio in percentage for native payment. For example, a value of 0
@@ -291,7 +337,9 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
       uint32 fulfillmentFlatFeeNativePPM,
       uint32 fulfillmentFlatFeeLinkDiscountPPM,
       uint32 wrapperGasOverhead,
-      uint32 coordinatorGasOverhead,
+      uint32 coordinatorGasOverheadNative,
+      uint32 coordinatorGasOverheadLink,
+      uint16 coordinatorGasOverheadPerWord,
       uint8 wrapperNativePremiumPercentage,
       uint8 wrapperLinkPremiumPercentage,
       bytes32 keyHash,
@@ -304,7 +352,9 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
       s_fulfillmentFlatFeeNativePPM,
       s_fulfillmentFlatFeeLinkDiscountPPM,
       s_wrapperGasOverhead,
-      s_coordinatorGasOverhead,
+      s_coordinatorGasOverheadNative,
+      s_coordinatorGasOverheadLink,
+      s_coordinatorGasOverheadPerWord,
       s_coordinatorNativePremiumPercentage,
       s_coordinatorLinkPremiumPercentage,
       s_keyHash,
@@ -322,16 +372,18 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    * @param _callbackGasLimit is the gas limit used to estimate the price.
    */
   function calculateRequestPrice(
-    uint32 _callbackGasLimit
+    uint32 _callbackGasLimit,
+    uint32 _numWords
   ) external view override onlyConfiguredNotDisabled returns (uint256) {
     (int256 weiPerUnitLink, ) = _getFeedData();
-    return _calculateRequestPrice(_callbackGasLimit, tx.gasprice, weiPerUnitLink);
+    return _calculateRequestPrice(_callbackGasLimit, _numWords, tx.gasprice, weiPerUnitLink);
   }
 
   function calculateRequestPriceNative(
-    uint32 _callbackGasLimit
+    uint32 _callbackGasLimit,
+    uint32 _numWords
   ) external view override onlyConfiguredNotDisabled returns (uint256) {
-    return _calculateRequestPriceNative(_callbackGasLimit, tx.gasprice);
+    return _calculateRequestPriceNative(_callbackGasLimit, _numWords, tx.gasprice);
   }
 
   /**
@@ -345,20 +397,34 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    */
   function estimateRequestPrice(
     uint32 _callbackGasLimit,
+    uint32 _numWords,
     uint256 _requestGasPriceWei
   ) external view override onlyConfiguredNotDisabled returns (uint256) {
     (int256 weiPerUnitLink, ) = _getFeedData();
-    return _calculateRequestPrice(_callbackGasLimit, _requestGasPriceWei, weiPerUnitLink);
+    return _calculateRequestPrice(_callbackGasLimit, _numWords, _requestGasPriceWei, weiPerUnitLink);
   }
 
   function estimateRequestPriceNative(
     uint32 _callbackGasLimit,
+    uint32 _numWords,
     uint256 _requestGasPriceWei
   ) external view override onlyConfiguredNotDisabled returns (uint256) {
-    return _calculateRequestPriceNative(_callbackGasLimit, _requestGasPriceWei);
+    return _calculateRequestPriceNative(_callbackGasLimit, _numWords, _requestGasPriceWei);
   }
 
-  function _calculateRequestPriceNative(uint256 _gas, uint256 _requestGasPrice) internal view returns (uint256) {
+  /**
+   * @notice Returns the L1 fee for the fulfillment calldata payload (always return 0 on L1 chains).
+   * @notice Override this function in chain specific way for L2 chains.
+   */
+  function _getL1CostWei() internal view virtual returns (uint256) {
+    return 0;
+  }
+
+  function _calculateRequestPriceNative(
+    uint256 _gas,
+    uint32 _numWords,
+    uint256 _requestGasPrice
+  ) internal view returns (uint256) {
     // costWei is the base fee denominated in wei (native)
     // (wei/gas) * gas
     uint256 wrapperCostWei = _requestGasPrice * s_wrapperGasOverhead;
@@ -366,8 +432,8 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
     // coordinatorCostWei takes into account the L1 posting costs of the VRF fulfillment transaction, if we are on an L2.
     // (wei/gas) * gas + l1wei
     uint256 coordinatorCostWei = _requestGasPrice *
-      (_gas + s_coordinatorGasOverhead) +
-      ChainSpecificUtil._getL1CalldataGasCost(s_fulfillmentTxSizeBytes);
+      (_gas + _getCoordinatorGasOverhead(_numWords, true)) +
+      _getL1CostWei();
 
     // coordinatorCostWithPremiumAndFlatFeeWei is the coordinator cost with the percentage premium and flat fee applied
     // coordinator cost * premium multiplier + flat fee
@@ -379,6 +445,7 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
 
   function _calculateRequestPrice(
     uint256 _gas,
+    uint32 _numWords,
     uint256 _requestGasPrice,
     int256 _weiPerUnitLink
   ) internal view returns (uint256) {
@@ -389,8 +456,8 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
     // coordinatorCostWei takes into account the L1 posting costs of the VRF fulfillment transaction, if we are on an L2.
     // (wei/gas) * gas + l1wei
     uint256 coordinatorCostWei = _requestGasPrice *
-      (_gas + s_coordinatorGasOverhead) +
-      ChainSpecificUtil._getL1CalldataGasCost(s_fulfillmentTxSizeBytes);
+      (_gas + _getCoordinatorGasOverhead(_numWords, false)) +
+      _getL1CostWei();
 
     // coordinatorCostWithPremiumAndFlatFeeWei is the coordinator cost with the percentage premium and flat fee applied
     // coordinator cost * premium multiplier + flat fee
@@ -427,7 +494,7 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
     checkPaymentMode(extraArgs, true);
     uint32 eip150Overhead = _getEIP150Overhead(callbackGasLimit);
     (int256 weiPerUnitLink, bool isFeedStale) = _getFeedData();
-    uint256 price = _calculateRequestPrice(callbackGasLimit, tx.gasprice, weiPerUnitLink);
+    uint256 price = _calculateRequestPrice(callbackGasLimit, numWords, tx.gasprice, weiPerUnitLink);
     // solhint-disable-next-line gas-custom-errors
     require(_amount >= price, "fee too low");
     // solhint-disable-next-line gas-custom-errors
@@ -486,7 +553,7 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
     checkPaymentMode(extraArgs, false);
 
     uint32 eip150Overhead = _getEIP150Overhead(_callbackGasLimit);
-    uint256 price = _calculateRequestPriceNative(_callbackGasLimit, tx.gasprice);
+    uint256 price = _calculateRequestPriceNative(_callbackGasLimit, _numWords, tx.gasprice);
     // solhint-disable-next-line gas-custom-errors
     require(msg.value >= price, "fee too low");
     // solhint-disable-next-line gas-custom-errors
@@ -557,7 +624,7 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
   }
 
   // solhint-disable-next-line chainlink-solidity/prefix-internal-functions-with-underscore
-  function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override {
+  function fulfillRandomWords(uint256 _requestId, uint256[] calldata _randomWords) internal override {
     Callback memory callback = s_callbacks[_requestId];
     delete s_callbacks[_requestId];
 
@@ -601,6 +668,14 @@ contract VRFV2PlusWrapper is ConfirmedOwner, TypeAndVersionInterface, VRFConsume
    */
   function _getEIP150Overhead(uint32 gas) private pure returns (uint32) {
     return gas / 63 + 1;
+  }
+
+  function _getCoordinatorGasOverhead(uint32 numWords, bool nativePayment) internal view returns (uint32) {
+    if (nativePayment) {
+      return s_coordinatorGasOverheadNative + numWords * s_coordinatorGasOverheadPerWord;
+    } else {
+      return s_coordinatorGasOverheadLink + numWords * s_coordinatorGasOverheadPerWord;
+    }
   }
 
   /**

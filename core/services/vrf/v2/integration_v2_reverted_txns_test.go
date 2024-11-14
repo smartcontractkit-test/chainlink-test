@@ -27,7 +27,6 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/vrf_coordinator_v2"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/vrf_external_sub_owner_example"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
-	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest/heavyweight"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
@@ -37,6 +36,7 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/services/vrf/vrfcommon"
 	"github.com/smartcontractkit/chainlink/v2/core/testdata/testspecs"
 	"github.com/smartcontractkit/chainlink/v2/core/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/utils/testutils/heavyweight"
 )
 
 var (
@@ -279,7 +279,8 @@ func fulfillVRFReq(t *testing.T,
 	require.NoError(t, err)
 
 	ec := th.uni.backend
-	chainID := th.uni.backend.Blockchain().Config().ChainID
+	chainID, err := th.uni.backend.Client().ChainID(testutils.Context(t))
+	require.NoError(t, err)
 	chain, err := th.app.GetRelayers().LegacyEVMChains().Get(chainID.String())
 	require.NoError(t, err)
 
@@ -345,7 +346,8 @@ func fulfilBatchVRFReq(t *testing.T,
 	require.NoError(t, err)
 
 	ec := th.uni.backend
-	chainID := th.uni.backend.Blockchain().Config().ChainID
+	chainID, err := th.uni.backend.Client().ChainID(testutils.Context(t))
+	require.NoError(t, err)
 	chain, err := th.app.GetRelayers().LegacyEVMChains().Get(chainID.String())
 	require.NoError(t, err)
 
@@ -411,6 +413,7 @@ func createVRFJobsNew(
 	chainID *big.Int,
 	gasLanePrices ...*assets.Wei,
 ) (jobs []job.Job, vrfKeyIDs []string) {
+	ctx := testutils.Context(t)
 	if len(gasLanePrices) != len(fromKeys) {
 		t.Fatalf("must provide one gas lane price for each set of from addresses. len(gasLanePrices) != len(fromKeys) [%d != %d]",
 			len(gasLanePrices), len(fromKeys))
@@ -422,7 +425,7 @@ func createVRFJobsNew(
 			keyStrs = append(keyStrs, k.Address.String())
 		}
 
-		vrfkey, err := app.GetKeyStore().VRF().Create()
+		vrfkey, err := app.GetKeyStore().VRF().Create(ctx)
 		require.NoError(t, err)
 
 		jid := uuid.New()
@@ -447,14 +450,14 @@ func createVRFJobsNew(
 		jb, err := vrfcommon.ValidatedVRFSpec(s)
 		t.Log(jb.VRFSpec.PublicKey.MustHash(), vrfkey.PublicKey.MustHash())
 		require.NoError(t, err)
-		err = app.JobSpawner().CreateJob(&jb)
+		err = app.JobSpawner().CreateJob(ctx, nil, &jb)
 		require.NoError(t, err)
 		registerProvingKeyHelper(t, uni.coordinatorV2UniverseCommon, coordinator, vrfkey, ptr(gasLanePrices[i].ToInt().Uint64()))
 		jobs = append(jobs, jb)
 		vrfKeyIDs = append(vrfKeyIDs, vrfkey.ID())
 	}
 	// Wait until all jobs are active and listening for logs
-	gomega.NewWithT(t).Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		jbs := app.JobSpawner().ActiveJobs()
 		var count int
 		for _, jb := range jbs {
@@ -463,7 +466,7 @@ func createVRFJobsNew(
 			}
 		}
 		return count == len(fromKeys)
-	}, testutils.WaitTimeout(t), 100*time.Millisecond).Should(gomega.BeTrue())
+	}, testutils.WaitTimeout(t), 100*time.Millisecond)
 	// Unfortunately the lb needs heads to be able to backfill logs to new subscribers.
 	// To avoid confirming
 	// TODO: it could just backfill immediately upon receiving a new subscriber? (though would
@@ -589,12 +592,12 @@ func newRevertTxnTH(t *testing.T,
 	}
 	coordinator := uni.rootContract
 	coordinatorAddress := uni.rootContractAddress
-	th.chainID = th.uni.backend.Blockchain().Config().ChainID
+	th.chainID = config.EVMConfigs()[0].ChainID.ToInt()
 	var err error
 
 	th.eoaConsumerAddr, _, th.eoaConsumer, err = vrf_external_sub_owner_example.DeployVRFExternalSubOwnerExample(
 		uni.neil,
-		uni.backend,
+		uni.backend.Client(),
 		coordinatorAddress,
 		uni.linkContractAddress,
 	)

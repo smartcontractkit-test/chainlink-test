@@ -1,14 +1,17 @@
 package txmgr
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
-	commonconfig "github.com/smartcontractkit/chainlink/v2/common/config"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	evmconfig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/config"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config/chaintype"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config/toml"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils"
 	"github.com/smartcontractkit/chainlink/v2/core/config"
 )
@@ -48,22 +51,56 @@ type TestEvmConfig struct {
 	ResendAfterThreshold time.Duration
 	BumpThreshold        uint64
 	MaxQueued            uint64
+	Enabled              bool
+	Threshold            uint32
+	MinAttempts          uint32
+	DetectionApiUrl      *url.URL
+	RpcDefaultBatchSize  uint32
 }
 
 func (e *TestEvmConfig) Transactions() evmconfig.Transactions {
-	return &transactionsConfig{e: e}
+	return &transactionsConfig{e: e, autoPurge: &autoPurgeConfig{}}
 }
 
 func (e *TestEvmConfig) NonceAutoSync() bool { return true }
 
 func (e *TestEvmConfig) FinalityDepth() uint32 { return 42 }
 
+func (e *TestEvmConfig) ChainType() chaintype.ChainType { return "" }
+
+func (e *TestEvmConfig) RPCDefaultBatchSize() uint32 { return e.RpcDefaultBatchSize }
+
 type TestGasEstimatorConfig struct {
 	bumpThreshold uint64
 }
 
+func (g *TestGasEstimatorConfig) DAOracle() evmconfig.DAOracle {
+	return &TestDAOracleConfig{}
+}
+
+type TestDAOracleConfig struct {
+	evmconfig.DAOracle
+}
+
+func (d *TestDAOracleConfig) OracleType() *toml.DAOracleType {
+	oracleType := toml.DAOracleOPStack
+	return &oracleType
+}
+func (d *TestDAOracleConfig) OracleAddress() *types.EIP55Address {
+	a, err := types.NewEIP55Address("0x420000000000000000000000000000000000000F")
+	if err != nil {
+		panic(err)
+	}
+	return &a
+}
+func (d *TestDAOracleConfig) CustomGasPriceCalldata() *string { return nil }
+
 func (g *TestGasEstimatorConfig) BlockHistory() evmconfig.BlockHistory {
 	return &TestBlockHistoryConfig{}
+}
+
+func (g *TestGasEstimatorConfig) FeeHistory() evmconfig.FeeHistory {
+	return &TestFeeHistoryConfig{}
 }
 
 func (g *TestGasEstimatorConfig) EIP1559DynamicFees() bool   { return false }
@@ -82,6 +119,7 @@ func (g *TestGasEstimatorConfig) LimitTransfer() uint64      { return 42 }
 func (g *TestGasEstimatorConfig) PriceMax() *assets.Wei      { return assets.NewWeiI(42) }
 func (g *TestGasEstimatorConfig) PriceMin() *assets.Wei      { return assets.NewWeiI(42) }
 func (g *TestGasEstimatorConfig) Mode() string               { return "FixedPrice" }
+func (g *TestGasEstimatorConfig) EstimateLimit() bool        { return false }
 func (g *TestGasEstimatorConfig) LimitJobType() evmconfig.LimitJobType {
 	return &TestLimitJobTypeConfig{}
 }
@@ -113,39 +151,51 @@ func (b *TestBlockHistoryConfig) BlockHistorySize() uint16          { return 42 
 func (b *TestBlockHistoryConfig) EIP1559FeeCapBufferBlocks() uint16 { return 42 }
 func (b *TestBlockHistoryConfig) TransactionPercentile() uint16     { return 42 }
 
-type transactionsConfig struct {
-	evmconfig.Transactions
-	e *TestEvmConfig
+type TestFeeHistoryConfig struct {
+	evmconfig.FeeHistory
 }
 
-func (*transactionsConfig) ForwardersEnabled() bool               { return true }
-func (t *transactionsConfig) MaxInFlight() uint32                 { return t.e.MaxInFlight }
-func (t *transactionsConfig) MaxQueued() uint64                   { return t.e.MaxQueued }
-func (t *transactionsConfig) ReaperInterval() time.Duration       { return t.e.ReaperInterval }
-func (t *transactionsConfig) ReaperThreshold() time.Duration      { return t.e.ReaperThreshold }
-func (t *transactionsConfig) ResendAfterThreshold() time.Duration { return t.e.ResendAfterThreshold }
+func (b *TestFeeHistoryConfig) CacheTimeout() time.Duration { return 0 * time.Second }
+
+type transactionsConfig struct {
+	evmconfig.Transactions
+	e         *TestEvmConfig
+	autoPurge evmconfig.AutoPurgeConfig
+}
+
+func (*transactionsConfig) ForwardersEnabled() bool                { return true }
+func (t *transactionsConfig) MaxInFlight() uint32                  { return t.e.MaxInFlight }
+func (t *transactionsConfig) MaxQueued() uint64                    { return t.e.MaxQueued }
+func (t *transactionsConfig) ReaperInterval() time.Duration        { return t.e.ReaperInterval }
+func (t *transactionsConfig) ReaperThreshold() time.Duration       { return t.e.ReaperThreshold }
+func (t *transactionsConfig) ResendAfterThreshold() time.Duration  { return t.e.ResendAfterThreshold }
+func (t *transactionsConfig) AutoPurge() evmconfig.AutoPurgeConfig { return t.autoPurge }
+
+type autoPurgeConfig struct {
+	evmconfig.AutoPurgeConfig
+}
+
+func (a *autoPurgeConfig) Enabled() bool { return false }
 
 type MockConfig struct {
-	EvmConfig           *TestEvmConfig
-	RpcDefaultBatchSize uint32
-	finalityDepth       uint32
-	finalityTagEnabled  bool
+	EvmConfig          *TestEvmConfig
+	finalityDepth      uint32
+	finalityTagEnabled bool
 }
 
 func (c *MockConfig) EVM() evmconfig.EVM {
 	return c.EvmConfig
 }
 
-func (c *MockConfig) NonceAutoSync() bool               { return true }
-func (c *MockConfig) ChainType() commonconfig.ChainType { return "" }
-func (c *MockConfig) FinalityDepth() uint32             { return c.finalityDepth }
-func (c *MockConfig) SetFinalityDepth(fd uint32)        { c.finalityDepth = fd }
-func (c *MockConfig) FinalityTagEnabled() bool          { return c.finalityTagEnabled }
-func (c *MockConfig) RPCDefaultBatchSize() uint32       { return c.RpcDefaultBatchSize }
+func (c *MockConfig) NonceAutoSync() bool            { return true }
+func (c *MockConfig) ChainType() chaintype.ChainType { return "" }
+func (c *MockConfig) FinalityDepth() uint32          { return c.finalityDepth }
+func (c *MockConfig) SetFinalityDepth(fd uint32)     { c.finalityDepth = fd }
+func (c *MockConfig) FinalityTagEnabled() bool       { return c.finalityTagEnabled }
 
 func MakeTestConfigs(t *testing.T) (*MockConfig, *TestDatabaseConfig, *TestEvmConfig) {
 	db := &TestDatabaseConfig{defaultQueryTimeout: utils.DefaultQueryTimeout}
-	ec := &TestEvmConfig{BumpThreshold: 42, MaxInFlight: uint32(42), MaxQueued: uint64(0), ReaperInterval: time.Duration(0), ReaperThreshold: time.Duration(0)}
+	ec := &TestEvmConfig{BumpThreshold: 42, MaxInFlight: uint32(42), MaxQueued: uint64(0), ReaperInterval: time.Duration(0), ReaperThreshold: time.Duration(0), RpcDefaultBatchSize: uint32(250)}
 	config := &MockConfig{EvmConfig: ec}
 	return config, db, ec
 }

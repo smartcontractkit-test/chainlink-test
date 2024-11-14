@@ -2,16 +2,17 @@ package config
 
 import (
 	"math/big"
+	"net/url"
 	"time"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 
 	commonassets "github.com/smartcontractkit/chainlink-common/pkg/assets"
 
-	commonconfig "github.com/smartcontractkit/chainlink/v2/common/config"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config/chaintype"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config/toml"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
-	"github.com/smartcontractkit/chainlink/v2/core/config"
 )
 
 type EVM interface {
@@ -21,7 +22,7 @@ type EVM interface {
 	GasEstimator() GasEstimator
 	OCR() OCR
 	OCR2() OCR2
-	ChainWriter() ChainWriter
+	Workflow() Workflow
 	NodePool() NodePool
 
 	AutoCreateKey() bool
@@ -29,7 +30,7 @@ type EVM interface {
 	BlockBackfillSkip() bool
 	BlockEmissionIdleWarningThreshold() time.Duration
 	ChainID() *big.Int
-	ChainType() commonconfig.ChainType
+	ChainType() chaintype.ChainType
 	FinalityDepth() uint32
 	FinalityTagEnabled() bool
 	FlagsContractAddress() string
@@ -43,8 +44,11 @@ type EVM interface {
 	MinIncomingConfirmations() uint32
 	NonceAutoSync() bool
 	OperatorFactoryAddress() string
+	LogBroadcasterEnabled() bool
 	RPCDefaultBatchSize() uint32
 	NodeNoNewHeadsThreshold() time.Duration
+	FinalizedBlockOffset() uint32
+	NoNewFinalizedHeadsThreshold() time.Duration
 
 	IsEnabled() bool
 	TOMLString() (string, error)
@@ -71,10 +75,31 @@ type HeadTracker interface {
 	HistoryDepth() uint32
 	MaxBufferSize() uint32
 	SamplingInterval() time.Duration
+	FinalityTagBypass() bool
+	MaxAllowedFinalityDepth() uint32
+	PersistenceEnabled() bool
 }
 
 type BalanceMonitor interface {
 	Enabled() bool
+}
+
+type ClientErrors interface {
+	NonceTooLow() string
+	NonceTooHigh() string
+	ReplacementTransactionUnderpriced() string
+	LimitReached() string
+	TransactionAlreadyInMempool() string
+	TerminallyUnderpriced() string
+	InsufficientEth() string
+	TxFeeExceedsCap() string
+	L2FeeTooLow() string
+	L2FeeTooHigh() string
+	L2Full() string
+	TransactionAlreadyMined() string
+	Fatal() string
+	ServiceUnavailable() string
+	TooManyResults() string
 }
 
 type Transactions interface {
@@ -84,11 +109,19 @@ type Transactions interface {
 	ReaperThreshold() time.Duration
 	MaxInFlight() uint32
 	MaxQueued() uint64
+	AutoPurge() AutoPurgeConfig
 }
 
-//go:generate mockery --quiet --name GasEstimator --output ./mocks/ --case=underscore
+type AutoPurgeConfig interface {
+	Enabled() bool
+	Threshold() *uint32
+	MinAttempts() *uint32
+	DetectionApiUrl() *url.URL
+}
+
 type GasEstimator interface {
 	BlockHistory() BlockHistory
+	FeeHistory() FeeHistory
 	LimitJobType() LimitJobType
 
 	EIP1559DynamicFees() bool
@@ -108,6 +141,8 @@ type GasEstimator interface {
 	PriceMin() *assets.Wei
 	Mode() string
 	PriceMaxKey(gethcommon.Address) *assets.Wei
+	EstimateLimit() bool
+	DAOracle() DAOracle
 }
 
 type LimitJobType interface {
@@ -129,9 +164,20 @@ type BlockHistory interface {
 	TransactionPercentile() uint16
 }
 
-type ChainWriter interface {
+type DAOracle interface {
+	OracleType() *toml.DAOracleType
+	OracleAddress() *types.EIP55Address
+	CustomGasPriceCalldata() *string
+}
+
+type FeeHistory interface {
+	CacheTimeout() time.Duration
+}
+
+type Workflow interface {
 	FromAddress() *types.EIP55Address
 	ForwarderAddress() *types.EIP55Address
+	GasLimitDefault() *uint64
 }
 
 type NodePool interface {
@@ -142,14 +188,13 @@ type NodePool interface {
 	LeaseDuration() time.Duration
 	NodeIsSyncingEnabled() bool
 	FinalizedBlockPollInterval() time.Duration
+	Errors() ClientErrors
+	EnforceRepeatableRead() bool
+	DeathDeclarationDelay() time.Duration
+	NewHeadsPollInterval() time.Duration
 }
 
 // TODO BCF-2509 does the chainscopedconfig really need the entire app config?
-//
-//go:generate mockery --quiet --name ChainScopedConfig --output ./mocks/ --case=underscore
 type ChainScopedConfig interface {
-	config.AppConfig
-	Validate() error
-
 	EVM() EVM
 }

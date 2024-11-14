@@ -8,22 +8,23 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 
-	commontypes "github.com/smartcontractkit/chainlink/v2/common/types"
+	"github.com/smartcontractkit/chainlink/v2/common/headtracker"
+	commontypes "github.com/smartcontractkit/chainlink/v2/common/headtracker/types"
 	httypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/headtracker/types"
 	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 )
 
 type headSaver struct {
 	orm      ORM
-	config   Config
-	htConfig HeadTrackerConfig
+	config   commontypes.Config
+	htConfig commontypes.HeadTrackerConfig
 	logger   logger.Logger
 	heads    Heads
 }
 
-var _ commontypes.HeadSaver[*evmtypes.Head, common.Hash] = (*headSaver)(nil)
+var _ headtracker.HeadSaver[*evmtypes.Head, common.Hash] = (*headSaver)(nil)
 
-func NewHeadSaver(lggr logger.Logger, orm ORM, config Config, htConfig HeadTrackerConfig) httypes.HeadSaver {
+func NewHeadSaver(lggr logger.Logger, orm ORM, config commontypes.Config, htConfig commontypes.HeadTrackerConfig) httypes.HeadSaver {
 	return &headSaver{
 		orm:      orm,
 		config:   config,
@@ -34,13 +35,12 @@ func NewHeadSaver(lggr logger.Logger, orm ORM, config Config, htConfig HeadTrack
 }
 
 func (hs *headSaver) Save(ctx context.Context, head *evmtypes.Head) error {
-	if err := hs.orm.IdempotentInsertHead(ctx, head); err != nil {
+	// adding new head might form a cycle, so it's better to validate cached chain before persisting it
+	if err := hs.heads.AddHeads(head); err != nil {
 		return err
 	}
 
-	hs.heads.AddHeads(head)
-
-	return nil
+	return hs.orm.IdempotentInsertHead(ctx, head)
 }
 
 func (hs *headSaver) Load(ctx context.Context, latestFinalized int64) (chain *evmtypes.Head, err error) {
@@ -50,7 +50,10 @@ func (hs *headSaver) Load(ctx context.Context, latestFinalized int64) (chain *ev
 		return nil, err
 	}
 
-	hs.heads.AddHeads(heads...)
+	err = hs.heads.AddHeads(heads...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to populate cache with loaded heads: %w", err)
+	}
 	return hs.heads.LatestHead(), nil
 }
 

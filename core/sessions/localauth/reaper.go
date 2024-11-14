@@ -1,16 +1,17 @@
 package localauth
 
 import (
-	"database/sql"
+	"context"
 	"time"
 
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
 type sessionReaper struct {
-	db     *sql.DB
+	ds     sqlutil.DataSource
 	config SessionReaperConfig
 	lggr   logger.Logger
 }
@@ -21,29 +22,27 @@ type SessionReaperConfig interface {
 }
 
 // NewSessionReaper creates a reaper that cleans stale sessions from the store.
-func NewSessionReaper(db *sql.DB, config SessionReaperConfig, lggr logger.Logger) *utils.SleeperTask {
-	return utils.NewSleeperTask(&sessionReaper{
-		db,
+func NewSessionReaper(ds sqlutil.DataSource, config SessionReaperConfig, lggr logger.Logger) *utils.SleeperTask {
+	return utils.NewSleeperTaskCtx(&sessionReaper{
+		ds,
 		config,
 		lggr.Named("SessionReaper"),
 	})
 }
 
-func (sr *sessionReaper) Name() string {
-	return "SessionReaper"
-}
+func (sr *sessionReaper) Name() string { return sr.lggr.Name() }
 
-func (sr *sessionReaper) Work() {
+func (sr *sessionReaper) Work(ctx context.Context) {
 	recordCreationStaleThreshold := sr.config.SessionReaperExpiration().Before(
 		sr.config.SessionTimeout().Before(time.Now()))
-	err := sr.deleteStaleSessions(recordCreationStaleThreshold)
+	err := sr.deleteStaleSessions(ctx, recordCreationStaleThreshold)
 	if err != nil {
 		sr.lggr.Error("unable to reap stale sessions: ", err)
 	}
 }
 
 // DeleteStaleSessions deletes all sessions before the passed time.
-func (sr *sessionReaper) deleteStaleSessions(before time.Time) error {
-	_, err := sr.db.Exec("DELETE FROM sessions WHERE last_used < $1", before)
+func (sr *sessionReaper) deleteStaleSessions(ctx context.Context, before time.Time) error {
+	_, err := sr.ds.ExecContext(ctx, "DELETE FROM sessions WHERE last_used < $1", before)
 	return err
 }

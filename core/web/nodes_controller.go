@@ -11,7 +11,6 @@ import (
 
 	"github.com/smartcontractkit/chainlink/v2/core/logger/audit"
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
-	"github.com/smartcontractkit/chainlink/v2/core/services/relay"
 )
 
 type NodesController interface {
@@ -20,11 +19,11 @@ type NodesController interface {
 }
 
 type NetworkScopedNodeStatuser struct {
-	network  relay.Network
+	network  string
 	relayers chainlink.RelayerChainInteroperators
 }
 
-func NewNetworkScopedNodeStatuser(relayers chainlink.RelayerChainInteroperators, network relay.Network) *NetworkScopedNodeStatuser {
+func NewNetworkScopedNodeStatuser(relayers chainlink.RelayerChainInteroperators, network string) *NetworkScopedNodeStatuser {
 	scoped := relayers.List(chainlink.FilterRelayersByType(network))
 	return &NetworkScopedNodeStatuser{
 		network:  network,
@@ -32,7 +31,7 @@ func NewNetworkScopedNodeStatuser(relayers chainlink.RelayerChainInteroperators,
 	}
 }
 
-func (n *NetworkScopedNodeStatuser) NodeStatuses(ctx context.Context, offset, limit int, relayIDs ...relay.ID) (nodes []types.NodeStatus, count int, err error) {
+func (n *NetworkScopedNodeStatuser) NodeStatuses(ctx context.Context, offset, limit int, relayIDs ...types.RelayID) (nodes []types.NodeStatus, count int, err error) {
 	return n.relayers.NodeStatuses(ctx, offset, limit, relayIDs...)
 }
 
@@ -69,19 +68,20 @@ func (n *nodesController[R]) Index(c *gin.Context, size, page, offset int) {
 	var count int
 	var err error
 
+	ctx := c.Request.Context()
 	if id == "" {
 		// fetch all nodes
-		nodes, count, err = n.nodeSet.NodeStatuses(c, offset, size)
+		nodes, count, err = n.nodeSet.NodeStatuses(ctx, offset, size)
 	} else {
 		// fetch nodes for chain ID
 		// backward compatibility
-		var rid relay.ID
+		var rid types.RelayID
 		err = rid.UnmarshalString(id)
 		if err != nil {
 			rid.ChainID = id
 			rid.Network = n.nodeSet.network
 		}
-		nodes, count, err = n.nodeSet.NodeStatuses(c, offset, size, rid)
+		nodes, count, err = n.nodeSet.NodeStatuses(ctx, offset, size, rid)
 	}
 
 	var resources []R

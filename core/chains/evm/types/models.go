@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -17,10 +19,12 @@ import (
 	pkgerrors "github.com/pkg/errors"
 	"github.com/ugorji/go/codec"
 
+	chainagnostictypes "github.com/smartcontractkit/chainlink-common/pkg/types"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/hex"
 
 	htrktypes "github.com/smartcontractkit/chainlink/v2/common/headtracker/types"
 	commontypes "github.com/smartcontractkit/chainlink/v2/common/types"
+
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/types/internal/blocks"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils"
@@ -34,7 +38,7 @@ type Head struct {
 	Number           int64
 	L1BlockNumber    sql.NullInt64
 	ParentHash       common.Hash
-	Parent           *Head
+	Parent           atomic.Pointer[Head]
 	EVMChainID       *ubig.Big
 	Timestamp        time.Time
 	CreatedAt        time.Time
@@ -44,21 +48,30 @@ type Head struct {
 	StateRoot        common.Hash
 	Difficulty       *big.Int
 	TotalDifficulty  *big.Int
-	IsFinalized      bool
+	IsFinalized      atomic.Bool
 }
 
 var _ commontypes.Head[common.Hash] = &Head{}
 var _ htrktypes.Head[common.Hash, *big.Int] = &Head{}
 
 // NewHead returns a Head instance.
-func NewHead(number *big.Int, blockHash common.Hash, parentHash common.Hash, timestamp uint64, chainID *ubig.Big) Head {
+func NewHead(number *big.Int, blockHash common.Hash, parentHash common.Hash, chainID *ubig.Big) Head {
 	return Head{
 		Number:     number.Int64(),
 		Hash:       blockHash,
 		ParentHash: parentHash,
-		Timestamp:  time.Unix(int64(timestamp), 0),
+		Timestamp:  time.Now(),
 		EVMChainID: chainID,
 	}
+}
+
+func (h *Head) SetFromHeader(header *types.Header) {
+	h.Hash = header.Hash()
+	h.Number = header.Number.Int64()
+	h.ParentHash = header.ParentHash
+	//nolint:gosec // G115
+	h.Timestamp = time.Unix(int64(header.Time), 0)
+	h.Difficulty = header.Difficulty
 }
 
 func (h *Head) BlockNumber() int64 {
@@ -74,10 +87,11 @@ func (h *Head) GetParentHash() common.Hash {
 }
 
 func (h *Head) GetParent() commontypes.Head[common.Hash] {
-	if h.Parent == nil {
-		return nil
+	if parent := h.Parent.Load(); parent != nil {
+		return parent
 	}
-	return h.Parent
+	// explicitly return nil to avoid *Head(nil)
+	return nil
 }
 
 func (h *Head) GetTimestamp() time.Time {
@@ -90,10 +104,11 @@ func (h *Head) BlockDifficulty() *big.Int {
 
 // EarliestInChain recurses through parents until it finds the earliest one
 func (h *Head) EarliestInChain() *Head {
-	for h.Parent != nil {
-		h = h.Parent
+	var earliestInChain *Head
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		earliestInChain = cur
 	}
-	return h
+	return earliestInChain
 }
 
 // EarliestHeadInChain recurses through parents until it finds the earliest one
@@ -103,14 +118,10 @@ func (h *Head) EarliestHeadInChain() commontypes.Head[common.Hash] {
 
 // IsInChain returns true if the given hash matches the hash of a head in the chain
 func (h *Head) IsInChain(blockHash common.Hash) bool {
-	for {
-		if h.Hash == blockHash {
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		if cur.Hash == blockHash {
 			return true
 		}
-		if h.Parent == nil {
-			break
-		}
-		h = h.Parent
 	}
 	return false
 }
@@ -118,34 +129,28 @@ func (h *Head) IsInChain(blockHash common.Hash) bool {
 // HashAtHeight returns the hash of the block at the given height, if it is in the chain.
 // If not in chain, returns the zero hash
 func (h *Head) HashAtHeight(blockNum int64) common.Hash {
-	for {
-		if h.Number == blockNum {
-			return h.Hash
-		}
-		if h.Parent == nil {
-			break
-		}
-		h = h.Parent
+	headAtHeight, err := h.HeadAtHeight(blockNum)
+	if err != nil {
+		return common.Hash{}
 	}
-	return common.Hash{}
+
+	return headAtHeight.BlockHash()
+}
+
+func (h *Head) HeadAtHeight(blockNum int64) (commontypes.Head[common.Hash], error) {
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		if cur.Number == blockNum {
+			return cur, nil
+		}
+	}
+	return nil, fmt.Errorf("failed to find head at height %d", blockNum)
 }
 
 // ChainLength returns the length of the chain followed by recursively looking up parents
 func (h *Head) ChainLength() uint32 {
-	if h == nil {
-		return 0
-	}
-	l := uint32(1)
-
-	for {
-		if h.Parent == nil {
-			break
-		}
+	l := uint32(0)
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
 		l++
-		if h == h.Parent {
-			panic("circular reference detected")
-		}
-		h = h.Parent
 	}
 	return l
 }
@@ -153,26 +158,20 @@ func (h *Head) ChainLength() uint32 {
 // ChainHashes returns an array of block hashes by recursively looking up parents
 func (h *Head) ChainHashes() []common.Hash {
 	var hashes []common.Hash
-
-	for {
-		hashes = append(hashes, h.Hash)
-		if h.Parent == nil {
-			break
-		}
-		if h == h.Parent {
-			panic("circular reference detected")
-		}
-		h = h.Parent
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		hashes = append(hashes, cur.Hash)
 	}
+
 	return hashes
 }
 
 func (h *Head) LatestFinalizedHead() commontypes.Head[common.Hash] {
-	for h != nil && !h.IsFinalized {
-		h = h.Parent
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		if cur.IsFinalized.Load() {
+			return cur
+		}
 	}
-
-	return h
+	return nil
 }
 
 func (h *Head) ChainID() *big.Int {
@@ -189,24 +188,22 @@ func (h *Head) IsValid() bool {
 
 func (h *Head) ChainString() string {
 	var sb strings.Builder
-
-	for {
-		sb.WriteString(h.String())
-		if h.Parent == nil {
-			break
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		if sb.Len() > 0 {
+			sb.WriteString("->")
 		}
-		if h == h.Parent {
-			panic("circular reference detected")
-		}
-		sb.WriteString("->")
-		h = h.Parent
+		sb.WriteString(cur.String())
 	}
+
 	sb.WriteString("->nil")
 	return sb.String()
 }
 
 // String returns a string representation of this head
 func (h *Head) String() string {
+	if h == nil {
+		return "<nil>"
+	}
 	return fmt.Sprintf("Head{Number: %d, Hash: %s, ParentHash: %s}", h.ToInt(), h.Hash.Hex(), h.ParentHash.Hex())
 }
 
@@ -244,11 +241,11 @@ func (h *Head) AsSlice(k int) (heads []*Head) {
 	if k < 1 || h == nil {
 		return
 	}
-	heads = make([]*Head, 1)
-	heads[0] = h
-	for len(heads) < k && h.Parent != nil {
-		h = h.Parent
-		heads = append(heads, h)
+	heads = make([]*Head, 0, k)
+	for cur := h; cur != nil; cur = cur.Parent.Load() {
+		if len(heads) < k {
+			heads = append(heads, cur)
+		}
 	}
 	return
 }
@@ -334,6 +331,19 @@ func (h *Head) MarshalJSON() ([]byte, error) {
 	return json.Marshal(jsonHead)
 }
 
+func (h *Head) ToChainAgnosticHead() *chainagnostictypes.Head {
+	if h == nil {
+		return nil
+	}
+
+	return &chainagnostictypes.Head{
+		Height: strconv.FormatInt(h.Number, 10),
+		Hash:   h.Hash.Bytes(),
+		//nolint:gosec // G115
+		Timestamp: uint64(h.Timestamp.Unix()),
+	}
+}
+
 // Block represents an ethereum block
 // This type is only used for the block history estimator, and can be expensive to unmarshal. Don't add unnecessary fields here.
 type Block struct {
@@ -369,7 +379,6 @@ var ErrMissingBlock = pkgerrors.New("missing block")
 
 // UnmarshalJSON unmarshals to a Block
 func (b *Block) UnmarshalJSON(data []byte) error {
-
 	var h codec.Handle = new(codec.JsonHandle)
 	bi := blocks.BlockInternal{}
 
@@ -392,8 +401,9 @@ func (b *Block) UnmarshalJSON(data []byte) error {
 		Hash:          bi.Hash,
 		ParentHash:    bi.ParentHash,
 		BaseFeePerGas: (*assets.Wei)(bi.BaseFeePerGas),
-		Timestamp:     time.Unix((int64((uint64)(bi.Timestamp))), 0),
-		Transactions:  fromInternalTxnSlice(bi.Transactions),
+		//nolint:gosec // G115
+		Timestamp:    time.Unix(int64(bi.Timestamp), 0),
+		Transactions: fromInternalTxnSlice(bi.Transactions),
 	}
 	return nil
 }
@@ -419,7 +429,6 @@ const LegacyTxType = blocks.TxType(0x0)
 
 // UnmarshalJSON unmarshals a Transaction
 func (t *Transaction) UnmarshalJSON(data []byte) error {
-
 	var h codec.Handle = new(codec.JsonHandle)
 	ti := blocks.TransactionInternal{}
 
@@ -443,7 +452,6 @@ func (t *Transaction) UnmarshalJSON(data []byte) error {
 }
 
 func (t *Transaction) MarshalJSON() ([]byte, error) {
-
 	ti := toInternalTxn(*t)
 
 	buf := bytes.NewBuffer(make([]byte, 0, 256))

@@ -53,6 +53,7 @@ func ISO8601UTC(t time.Time) string {
 
 // DurationFromNow returns the amount of time since the Time
 // field was last updated.
+// Deprecated: Use [time.Until].
 func DurationFromNow(t time.Time) time.Duration {
 	return time.Until(t)
 }
@@ -157,7 +158,7 @@ func ContextFromChan(chStop chan struct{}) (context.Context, context.CancelFunc)
 // ContextFromChanWithTimeout creates a context with a timeout that finishes when the provided channel receives or is closed.
 // Deprecated: Call [services.StopChan.CtxCancel] directly
 func ContextFromChanWithTimeout(chStop chan struct{}, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return services.StopChan(chStop).CtxCancel(context.WithTimeout(context.Background(), timeout))
+	return services.StopChan(chStop).CtxWithTimeout(timeout)
 }
 
 // Deprecated: use services.StopChan
@@ -479,7 +480,23 @@ func NewRedialBackoff() backoff.Backoff {
 		Max:    15 * time.Second,
 		Jitter: true,
 	}
+}
 
+func NewHTTPFetchBackoff() backoff.Backoff {
+	return backoff.Backoff{
+		Min:    100 * time.Millisecond,
+		Max:    15 * time.Second,
+		Jitter: true,
+	}
+}
+
+// NewDBBackoff is a standard backoff to use for database connection issues
+func NewDBBackoff() backoff.Backoff {
+	return backoff.Backoff{
+		Min:    100 * time.Millisecond,
+		Max:    5 * time.Second,
+		Jitter: true,
+	}
 }
 
 // KeyedMutex allows to lock based on particular values

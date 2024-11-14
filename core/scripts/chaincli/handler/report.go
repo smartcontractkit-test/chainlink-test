@@ -210,7 +210,7 @@ func NewOCR2Transaction(raw map[string]interface{}) (*OCR2Transaction, error) {
 		encoder: evm.EVMAutomationEncoder20{},
 		abi:     contract,
 		raw:     raw,
-		tx:      tx,
+		tx:      &tx,
 	}, nil
 }
 
@@ -218,7 +218,7 @@ type OCR2Transaction struct {
 	encoder evm.EVMAutomationEncoder20
 	abi     abi.ABI
 	raw     map[string]interface{}
-	tx      types.Transaction
+	tx      *types.Transaction
 }
 
 func (t *OCR2Transaction) TransactionHash() common.Hash {
@@ -250,10 +250,9 @@ func (t *OCR2Transaction) To() *common.Address {
 }
 
 func (t *OCR2Transaction) From() (common.Address, error) {
-
 	switch t.tx.Type() {
 	case 2:
-		from, err := types.Sender(types.NewLondonSigner(t.tx.ChainId()), &t.tx)
+		from, err := types.Sender(types.NewLondonSigner(t.tx.ChainId()), t.tx)
 		if err != nil {
 			return common.Address{}, fmt.Errorf("failed to get from addr: %s", err)
 		} else {
@@ -296,7 +295,6 @@ type OCR2TransmitTx struct {
 }
 
 func (t *OCR2TransmitTx) UpkeepsInTransmit() ([]ocr2keepers20.UpkeepResult, error) {
-
 	txData := t.tx.Data()
 
 	// recover Method from signature and ABI
@@ -367,7 +365,6 @@ func (t *OCR2TransmitTx) SetStaticValues(elem *OCR2ReportDataElem) {
 }
 
 func (t *OCR2TransmitTx) BatchElem() (rpc.BatchElem, error) {
-
 	bn, err := t.BlockNumber()
 	if err != nil {
 		return rpc.BatchElem{}, err

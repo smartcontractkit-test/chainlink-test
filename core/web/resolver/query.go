@@ -11,13 +11,15 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/types"
+
+	commonTypes "github.com/smartcontractkit/chainlink/v2/common/types"
 	"github.com/smartcontractkit/chainlink/v2/core/bridges"
 	"github.com/smartcontractkit/chainlink/v2/core/chains"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/vrfkey"
-	"github.com/smartcontractkit/chainlink/v2/core/services/relay"
 	evmrelay "github.com/smartcontractkit/chainlink/v2/core/services/relay/evm"
 	"github.com/smartcontractkit/chainlink/v2/core/utils/stringutils"
+	"github.com/smartcontractkit/chainlink/v2/core/web/loader"
 )
 
 // Bridge retrieves a bridges by name.
@@ -31,7 +33,7 @@ func (r *Resolver) Bridge(ctx context.Context, args struct{ ID graphql.ID }) (*B
 		return nil, err
 	}
 
-	bridge, err := r.App.BridgeORM().FindBridge(name)
+	bridge, err := r.App.BridgeORM().FindBridge(ctx, name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewBridgePayload(bridge, err), nil
@@ -55,7 +57,7 @@ func (r *Resolver) Bridges(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	brdgs, count, err := r.App.BridgeORM().BridgeTypes(offset, limit)
+	brdgs, count, err := r.App.BridgeORM().BridgeTypes(ctx, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -64,23 +66,37 @@ func (r *Resolver) Bridges(ctx context.Context, args struct {
 }
 
 // Chain retrieves a chain by id.
-func (r *Resolver) Chain(ctx context.Context, args struct{ ID graphql.ID }) (*ChainPayloadResolver, error) {
+func (r *Resolver) Chain(ctx context.Context,
+	args struct {
+		ID      graphql.ID
+		Network *string
+	}) (*ChainPayloadResolver, error) {
 	if err := authenticateUser(ctx); err != nil {
 		return nil, err
 	}
 
-	cs, _, err := r.App.EVMORM().Chains(relay.ChainID(args.ID))
+	// fall back to original behaviour if network is not provided
+	if args.Network == nil {
+		id, err := loader.GetChainByID(ctx, string(args.ID))
+		if err != nil {
+			if errors.Is(err, chains.ErrNotFound) {
+				return NewChainPayload(commonTypes.ChainStatusWithID{}, chains.ErrNotFound), nil
+			}
+			return nil, err
+		}
+		return NewChainPayload(*id, nil), nil
+	}
+
+	relayID := types.NewRelayID(*args.Network, string(args.ID))
+	id, err := loader.GetChainByRelayID(ctx, relayID.Name())
 	if err != nil {
+		if errors.Is(err, chains.ErrNotFound) {
+			return NewChainPayload(commonTypes.ChainStatusWithID{}, chains.ErrNotFound), nil
+		}
 		return nil, err
 	}
-	l := len(cs)
-	if l == 0 {
-		return NewChainPayload(types.ChainStatus{}, chains.ErrNotFound), nil
-	}
-	if l > 1 {
-		return nil, fmt.Errorf("multiple chains found: %d", len(cs))
-	}
-	return NewChainPayload(cs[0], nil), nil
+
+	return NewChainPayload(*id, nil), nil
 }
 
 // Chains retrieves a paginated list of chains.
@@ -95,18 +111,27 @@ func (r *Resolver) Chains(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	var chains []types.ChainStatus
-	for _, rel := range r.App.GetRelayers().Slice() {
-		status, err := rel.GetChainStatus(ctx)
+	var chains []commonTypes.ChainStatusWithID
+	relayersMap, err := r.App.GetRelayers().GetIDToRelayerMap()
+	if err != nil {
+		return nil, err
+	}
+
+	for k, v := range relayersMap {
+		s, err := v.GetChainStatus(ctx)
 		if err != nil {
 			return nil, err
 		}
-		chains = append(chains, status)
-	}
-	count := len(chains)
 
+		chains = append(chains, commonTypes.ChainStatusWithID{
+			ChainStatus: s,
+			RelayID:     k,
+		})
+	}
+
+	count := len(chains)
 	if count == 0 {
-		//No chains are configured, return an empty ChainsPayload, so we don't break the UI
+		// No chains are configured, return an empty ChainsPayload, so we don't break the UI
 		return NewChainsPayload(nil, 0), nil
 	}
 
@@ -119,7 +144,17 @@ func (r *Resolver) Chains(ctx context.Context, args struct {
 		end = offset + limit
 	}
 
+	sortByNetworkAndID(chains)
 	return NewChainsPayload(chains[offset:end], int32(count)), nil
+}
+
+func sortByNetworkAndID(chains []commonTypes.ChainStatusWithID) {
+	sort.SliceStable(chains, func(i, j int) bool {
+		if chains[i].Network == chains[j].Network {
+			return chains[i].ID < chains[j].ID
+		}
+		return chains[i].Network < chains[j].Network
+	})
 }
 
 // FeedsManager retrieves a feeds manager by id.
@@ -133,7 +168,7 @@ func (r *Resolver) FeedsManager(ctx context.Context, args struct{ ID graphql.ID 
 		return nil, err
 	}
 
-	mgr, err := r.App.GetFeedsService().GetManager(id)
+	mgr, err := r.App.GetFeedsService().GetManager(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewFeedsManagerPayload(nil, err), nil
@@ -150,7 +185,7 @@ func (r *Resolver) FeedsManagers(ctx context.Context) (*FeedsManagersPayloadReso
 		return nil, err
 	}
 
-	mgrs, err := r.App.GetFeedsService().ListManagers()
+	mgrs, err := r.App.GetFeedsService().ListManagers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -169,13 +204,13 @@ func (r *Resolver) Job(ctx context.Context, args struct{ ID graphql.ID }) (*JobP
 		return nil, err
 	}
 
-	j, err := r.App.JobORM().FindJobWithoutSpecErrors(id)
+	j, err := r.App.JobORM().FindJobWithoutSpecErrors(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewJobPayload(r.App, nil, err), nil
 		}
 
-		//We still need to show the job in UI/CLI even if the chain id is disabled
+		// We still need to show the job in UI/CLI even if the chain id is disabled
 		if errors.Is(err, chains.ErrNoSuchChainID) {
 			return NewJobPayload(r.App, &j, err), nil
 		}
@@ -198,7 +233,7 @@ func (r *Resolver) Jobs(ctx context.Context, args struct {
 	offset := pageOffset(args.Offset)
 	limit := pageLimit(args.Limit)
 
-	jobs, count, err := r.App.JobORM().FindJobs(offset, limit)
+	jobs, count, err := r.App.JobORM().FindJobs(ctx, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +364,7 @@ func (r *Resolver) JobProposal(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	jp, err := r.App.GetFeedsService().GetJobProposal(id)
+	jp, err := r.App.GetFeedsService().GetJobProposal(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewJobProposalPayload(nil, err), nil
@@ -378,7 +413,7 @@ func (r *Resolver) JobRuns(ctx context.Context, args struct {
 	limit := pageLimit(args.Limit)
 	offset := pageOffset(args.Offset)
 
-	runs, count, err := r.App.JobORM().PipelineRuns(nil, offset, limit)
+	runs, count, err := r.App.JobORM().PipelineRuns(ctx, nil, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +433,7 @@ func (r *Resolver) JobRun(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	jr, err := r.App.JobORM().FindPipelineRunByID(id)
+	jr, err := r.App.JobORM().FindPipelineRunByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewJobRunPayload(nil, r.App, err), nil
@@ -551,6 +586,43 @@ func (r *Resolver) SolanaKeys(ctx context.Context) (*SolanaKeysPayloadResolver, 
 	}
 
 	return NewSolanaKeysPayload(keys), nil
+}
+
+func (r *Resolver) AptosKeys(ctx context.Context) (*AptosKeysPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+
+	keys, err := r.App.GetKeyStore().Aptos().GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewAptosKeysPayload(keys), nil
+}
+
+func (r *Resolver) CosmosKeys(ctx context.Context) (*CosmosKeysPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+	keys, err := r.App.GetKeyStore().Cosmos().GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewCosmosKeysPayload(keys), nil
+}
+
+func (r *Resolver) StarkNetKeys(ctx context.Context) (*StarkNetKeysPayloadResolver, error) {
+	if err := authenticateUser(ctx); err != nil {
+		return nil, err
+	}
+	keys, err := r.App.GetKeyStore().StarkNet().GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewStarkNetKeysPayload(keys), nil
 }
 
 func (r *Resolver) SQLLogging(ctx context.Context) (*GetSQLLoggingPayloadResolver, error) {

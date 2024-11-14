@@ -13,7 +13,6 @@ import (
 
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
-	"github.com/smartcontractkit/chainlink/v2/core/services/pg"
 	"github.com/smartcontractkit/chainlink/v2/core/services/pipeline"
 )
 
@@ -74,7 +73,7 @@ func (d *Delegate) BeforeJobDeleted(spec job.Job) {
 		)
 	}
 }
-func (d *Delegate) OnDeleteJob(ctx context.Context, jb job.Job, q pg.Queryer) error { return nil }
+func (d *Delegate) OnDeleteJob(context.Context, job.Job) error { return nil }
 
 // ServicesForSpec satisfies the job.Delegate interface.
 func (d *Delegate) ServicesForSpec(ctx context.Context, spec job.Job) ([]job.ServiceCtx, error) {
@@ -180,7 +179,7 @@ func (r *webhookJobRunner) RunJob(ctx context.Context, jobUUID uuid.UUID, reques
 
 	run := pipeline.NewRun(*spec.PipelineSpec, vars)
 
-	_, err := r.runner.Run(ctx, run, jobLggr, true, nil)
+	_, err := r.runner.Run(ctx, run, true, nil)
 	if err != nil {
 		jobLggr.Errorw("Error running pipeline for webhook job", "err", err)
 		return 0, err

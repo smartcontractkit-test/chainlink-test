@@ -44,13 +44,13 @@ func Test_ChainKV(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, cs, 1)
 
-	//List explicit chain
+	// List explicit chain
 	cs, err = kv.List(testChainID)
 	assert.NoError(t, err)
 	assert.Len(t, cs, 1)
 	assert.Equal(t, testChain, cs[0])
 
-	//List no such id
+	// List no such id
 	cs, err = kv.List("no such id")
 	assert.Error(t, err)
 	assert.Len(t, cs, 0)
@@ -87,6 +87,11 @@ func (s *testChainService) Ready() error {
 // key is the dep name, value is nil if healthy, or error message otherwise.
 func (s *testChainService) HealthReport() map[string]error {
 	return map[string]error{}
+}
+
+// Implement [types.LatestHead] interface
+func (s *testChainService) LatestHead(_ context.Context) (head types.Head, err error) {
+	return
 }
 
 // Implement [types.ChainService] interface

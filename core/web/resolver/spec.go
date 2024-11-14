@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"fmt"
+
 	"github.com/graph-gophers/graphql-go"
 
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
@@ -117,12 +119,47 @@ func (r *SpecResolver) ToGatewaySpec() (*GatewaySpecResolver, bool) {
 	return &GatewaySpecResolver{spec: *r.j.GatewaySpec}, true
 }
 
+func (r *SpecResolver) ToWorkflowSpec() (*WorkflowSpecResolver, bool) {
+	if r.j.Type != job.Workflow {
+		return nil, false
+	}
+
+	return &WorkflowSpecResolver{spec: *r.j.WorkflowSpec}, true
+}
+
+func (r *SpecResolver) ToStandardCapabilitiesSpec() (*StandardCapabilitiesSpecResolver, bool) {
+	if r.j.Type != job.StandardCapabilities {
+		return nil, false
+	}
+
+	return &StandardCapabilitiesSpecResolver{spec: *r.j.StandardCapabilitiesSpec}, true
+}
+
+func (r *SpecResolver) ToStreamSpec() (*StreamSpecResolver, bool) {
+	if r.j.Type != job.Stream {
+		return nil, false
+	}
+
+	return &StreamSpecResolver{streamID: fmt.Sprintf("%d", r.j.StreamID)}, true
+}
+
 type CronSpecResolver struct {
 	spec job.CronSpec
 }
 
 func (r *CronSpecResolver) Schedule() string {
 	return r.spec.CronSchedule
+}
+
+// EVMChainID resolves the spec's evm chain id.
+func (r *CronSpecResolver) EVMChainID() *string {
+	if r.spec.EVMChainID == nil {
+		return nil
+	}
+
+	chainID := r.spec.EVMChainID.String()
+
+	return &chainID
 }
 
 // CreatedAt resolves the spec's created at timestamp.
@@ -969,4 +1006,60 @@ func (r *GatewaySpecResolver) GatewayConfig() gqlscalar.Map {
 
 func (r *GatewaySpecResolver) CreatedAt() graphql.Time {
 	return graphql.Time{Time: r.spec.CreatedAt}
+}
+
+type WorkflowSpecResolver struct {
+	spec job.WorkflowSpec
+}
+
+func (r *WorkflowSpecResolver) ID() graphql.ID {
+	return graphql.ID(stringutils.FromInt32(r.spec.ID))
+}
+
+func (r *WorkflowSpecResolver) WorkflowID() string {
+	return r.spec.WorkflowID
+}
+
+func (r *WorkflowSpecResolver) Workflow() string {
+	return r.spec.Workflow
+}
+
+func (r *WorkflowSpecResolver) WorkflowOwner() string {
+	return r.spec.WorkflowOwner
+}
+
+func (r *WorkflowSpecResolver) CreatedAt() graphql.Time {
+	return graphql.Time{Time: r.spec.CreatedAt}
+}
+
+func (r *WorkflowSpecResolver) UpdatedAt() graphql.Time {
+	return graphql.Time{Time: r.spec.UpdatedAt}
+}
+
+type StandardCapabilitiesSpecResolver struct {
+	spec job.StandardCapabilitiesSpec
+}
+
+func (r *StandardCapabilitiesSpecResolver) ID() graphql.ID {
+	return graphql.ID(stringutils.FromInt32(r.spec.ID))
+}
+
+func (r *StandardCapabilitiesSpecResolver) CreatedAt() graphql.Time {
+	return graphql.Time{Time: r.spec.CreatedAt}
+}
+
+func (r *StandardCapabilitiesSpecResolver) Command() string {
+	return r.spec.Command
+}
+
+func (r *StandardCapabilitiesSpecResolver) Config() *string {
+	return &r.spec.Config
+}
+
+type StreamSpecResolver struct {
+	streamID string
+}
+
+func (r *StreamSpecResolver) StreamID() string {
+	return r.streamID
 }

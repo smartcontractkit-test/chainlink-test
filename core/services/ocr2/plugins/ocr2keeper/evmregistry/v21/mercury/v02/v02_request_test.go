@@ -101,6 +101,7 @@ func setupClient(t *testing.T) *client {
 }
 
 func TestV02_SingleFeedRequest(t *testing.T) {
+	t.Parallel()
 	upkeepId := big.NewInt(123456789)
 	tests := []struct {
 		name           string
@@ -311,6 +312,7 @@ func TestV02_SingleFeedRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := setupClient(t)
 			defer c.Close()
 			hc := new(MockHttpClient)
@@ -382,6 +384,7 @@ func TestV02_SingleFeedRequest(t *testing.T) {
 }
 
 func TestV02_DoMercuryRequestV02(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 	tests := []struct {
@@ -581,6 +584,7 @@ func TestV02_DoMercuryRequestV02(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := setupClient(t)
 			defer c.Close()
 			if tt.pluginRetries != 0 {
@@ -624,6 +628,7 @@ func TestV02_DoMercuryRequestV02(t *testing.T) {
 }
 
 func TestV02_DoMercuryRequestV02_MultipleFeedsSuccess(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 
@@ -665,6 +670,7 @@ func TestV02_DoMercuryRequestV02_MultipleFeedsSuccess(t *testing.T) {
 }
 
 func TestV02_DoMercuryRequestV02_Timeout(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 
@@ -719,6 +725,7 @@ func TestV02_DoMercuryRequestV02_Timeout(t *testing.T) {
 }
 
 func TestV02_DoMercuryRequestV02_OneFeedSuccessOneFeedPipelineError(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 
@@ -766,6 +773,7 @@ func TestV02_DoMercuryRequestV02_OneFeedSuccessOneFeedPipelineError(t *testing.T
 }
 
 func TestV02_DoMercuryRequestV02_OneFeedSuccessOneFeedErrCode(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 
@@ -813,6 +821,7 @@ func TestV02_DoMercuryRequestV02_OneFeedSuccessOneFeedErrCode(t *testing.T) {
 }
 
 func TestV02_DoMercuryRequestV02_OneFeedSuccessOneFeedPipelineErrorConvertedError(t *testing.T) {
+	t.Parallel()
 	upkeepId, _ := new(big.Int).SetString("88786950015966611018675766524283132478093844178961698330929478019253453382042", 10)
 	pluginRetryKey := "88786950015966611018675766524283132478093844178961698330929478019253453382042|34"
 

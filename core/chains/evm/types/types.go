@@ -3,11 +3,15 @@ package types
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"log/slog"
 	"math/big"
+	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	gethTypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient/simulated"
 	"github.com/jackc/pgtype"
 	pkgerrors "github.com/pkg/errors"
 	"gopkg.in/guregu/null.v4"
@@ -17,6 +21,12 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils"
 	ubig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils/big"
 )
+
+func init() {
+	// This is a hack to undo geth's disruption of the std default logger.
+	// To be removed after upgrading geth to v1.13.10.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+}
 
 type Configs interface {
 	Chains(ids ...string) ([]types.ChainStatus, int, error)
@@ -55,6 +65,7 @@ type Receipt struct {
 	BlockHash         common.Hash     `json:"blockHash,omitempty"`
 	BlockNumber       *big.Int        `json:"blockNumber,omitempty"`
 	TransactionIndex  uint            `json:"transactionIndex"`
+	RevertReason      []byte          `json:"revertReason,omitempty"` // Only provided by Hedera
 }
 
 // FromGethReceipt converts a gethTypes.Receipt to a Receipt
@@ -78,6 +89,7 @@ func FromGethReceipt(gr *gethTypes.Receipt) *Receipt {
 		gr.BlockHash,
 		gr.BlockNumber,
 		gr.TransactionIndex,
+		nil,
 	}
 }
 
@@ -111,6 +123,7 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 		BlockHash         common.Hash     `json:"blockHash,omitempty"`
 		BlockNumber       *hexutil.Big    `json:"blockNumber,omitempty"`
 		TransactionIndex  hexutil.Uint    `json:"transactionIndex"`
+		RevertReason      hexutil.Bytes   `json:"revertReason,omitempty"` // Only provided by Hedera
 	}
 	var enc Receipt
 	enc.PostState = r.PostState
@@ -124,6 +137,7 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 	enc.BlockHash = r.BlockHash
 	enc.BlockNumber = (*hexutil.Big)(r.BlockNumber)
 	enc.TransactionIndex = hexutil.Uint(r.TransactionIndex)
+	enc.RevertReason = r.RevertReason
 	return json.Marshal(&enc)
 }
 
@@ -141,6 +155,7 @@ func (r *Receipt) UnmarshalJSON(input []byte) error {
 		BlockHash         *common.Hash     `json:"blockHash,omitempty"`
 		BlockNumber       *hexutil.Big     `json:"blockNumber,omitempty"`
 		TransactionIndex  *hexutil.Uint    `json:"transactionIndex"`
+		RevertReason      *hexutil.Bytes   `json:"revertReason,omitempty"` // Only provided by Hedera
 	}
 	var dec Receipt
 	if err := json.Unmarshal(input, &dec); err != nil {
@@ -176,6 +191,9 @@ func (r *Receipt) UnmarshalJSON(input []byte) error {
 	}
 	if dec.TransactionIndex != nil {
 		r.TransactionIndex = uint(*dec.TransactionIndex)
+	}
+	if dec.RevertReason != nil {
+		r.RevertReason = *dec.RevertReason
 	}
 	return nil
 }
@@ -216,6 +234,21 @@ func (r *Receipt) GetTransactionIndex() uint {
 func (r *Receipt) GetBlockHash() common.Hash {
 	return r.BlockHash
 }
+
+func (r *Receipt) GetRevertReason() *string {
+	if len(r.RevertReason) == 0 {
+		return nil
+	}
+	revertReason := string(r.RevertReason)
+	return &revertReason
+}
+
+type Confirmations int
+
+const (
+	Finalized   = Confirmations(-1)
+	Unconfirmed = Confirmations(0)
+)
 
 // Log represents a contract log event.
 //
@@ -384,4 +417,16 @@ func (h *HashArray) Scan(src interface{}) error {
 		*h = append(*h, hash)
 	}
 	return err
+}
+
+// Interface which is satisfied by simulated.Backend. Defined here so that default geth behavior can be
+// overridden in tests, and injected into our SimulatedBackend wrapper. This can be used to simulate rpc
+// servers with quirky behavior that differs from geth
+type Backend interface {
+	Close() error
+	Commit() common.Hash
+	Rollback()
+	Fork(parentHash common.Hash) error
+	AdjustTime(adjustment time.Duration) error
+	Client() simulated.Client
 }

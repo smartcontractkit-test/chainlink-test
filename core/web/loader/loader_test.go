@@ -13,11 +13,13 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/loop"
 	commontypes "github.com/smartcontractkit/chainlink-common/pkg/types"
+	"github.com/smartcontractkit/chainlink/v2/common/types"
 	"github.com/smartcontractkit/chainlink/v2/core/chains"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config/toml"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
 	evmtxmgrmocks "github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr/mocks"
 	evmutils "github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils"
+	"github.com/smartcontractkit/chainlink/v2/core/services/relay"
 
 	ubig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils/big"
 	coremocks "github.com/smartcontractkit/chainlink/v2/core/internal/mocks"
@@ -46,12 +48,18 @@ func TestLoader_Chains(t *testing.T) {
 	config2, err := chain2.TOMLString()
 	require.NoError(t, err)
 
-	app.On("GetRelayers").Return(&chainlinkmocks.FakeRelayerChainInteroperators{Relayers: []loop.Relayer{
-		testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
+	app.On("GetRelayers").Return(&chainlinkmocks.FakeRelayerChainInteroperators{Relayers: map[commontypes.RelayID]loop.Relayer{
+		commontypes.RelayID{
+			Network: relay.NetworkEVM,
+			ChainID: "1",
+		}: testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
 			ID:      "1",
 			Enabled: true,
 			Config:  config1,
-		}}, testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
+		}}, commontypes.RelayID{
+			Network: relay.NetworkEVM,
+			ChainID: "2",
+		}: testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
 			ID:      "2",
 			Enabled: true,
 			Config:  config2,
@@ -65,14 +73,93 @@ func TestLoader_Chains(t *testing.T) {
 	assert.Len(t, results, 3)
 
 	require.NoError(t, err)
-	want2 := commontypes.ChainStatus{ID: "2", Enabled: true, Config: config2}
-	assert.Equal(t, want2, results[0].Data.(commontypes.ChainStatus))
+	want2 := types.ChainStatusWithID{
+		ChainStatus: commontypes.ChainStatus{ID: "2", Enabled: true, Config: config2},
+		RelayID:     commontypes.RelayID{Network: relay.NetworkEVM, ChainID: "2"},
+	}
+	assert.Equal(t, want2, results[0].Data.(types.ChainStatusWithID))
 
-	want1 := commontypes.ChainStatus{ID: "1", Enabled: true, Config: config1}
-	assert.Equal(t, want1, results[1].Data.(commontypes.ChainStatus))
+	want1 := types.ChainStatusWithID{
+		ChainStatus: commontypes.ChainStatus{ID: "1", Enabled: true, Config: config1},
+		RelayID:     commontypes.RelayID{Network: relay.NetworkEVM, ChainID: "1"},
+	}
+	assert.Equal(t, want1, results[1].Data.(types.ChainStatusWithID))
 	assert.Nil(t, results[2].Data)
 	assert.Error(t, results[2].Error)
 	assert.ErrorIs(t, results[2].Error, chains.ErrNotFound)
+}
+
+func TestLoader_ChainsRelayID_HandleDuplicateIDAcrossNetworks(t *testing.T) {
+	t.Parallel()
+
+	app := coremocks.NewApplication(t)
+	ctx := InjectDataloader(testutils.Context(t), app)
+
+	one := ubig.NewI(1)
+	chain := toml.EVMConfig{ChainID: one, Chain: toml.Defaults(one)}
+	two := ubig.NewI(2)
+	chain2 := toml.EVMConfig{ChainID: two, Chain: toml.Defaults(two)}
+	config1, err := chain.TOMLString()
+	require.NoError(t, err)
+	config2, err := chain2.TOMLString()
+	require.NoError(t, err)
+
+	evm1 := commontypes.RelayID{
+		Network: relay.NetworkEVM,
+		ChainID: "1",
+	}
+	evm2 := commontypes.RelayID{
+		Network: relay.NetworkEVM,
+		ChainID: "2",
+	}
+	// check if can handle same chain ID but different network
+	solana1 := commontypes.RelayID{
+		Network: relay.NetworkSolana,
+		ChainID: "1",
+	}
+	app.On("GetRelayers").Return(&chainlinkmocks.FakeRelayerChainInteroperators{Relayers: map[commontypes.RelayID]loop.Relayer{
+		evm1: testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
+			ID:      "1",
+			Enabled: true,
+			Config:  config1,
+		}},
+		evm2: testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
+			ID:      "2",
+			Enabled: true,
+			Config:  config2,
+		}},
+		solana1: testutils2.MockRelayer{ChainStatus: commontypes.ChainStatus{
+			ID:      "1",
+			Enabled: true,
+			Config:  "config",
+		}},
+	}})
+
+	evm3 := commontypes.RelayID{
+		Network: relay.NetworkEVM,
+		ChainID: "3",
+	}
+
+	batcher := chainBatcher{app}
+	keys := dataloader.NewKeysFromStrings([]string{evm2.String(), evm1.String(), evm3.String()})
+	results := batcher.loadByRelayIDs(ctx, keys)
+
+	assert.Len(t, results, 3)
+
+	require.NoError(t, err)
+
+	assert.Equal(t, types.ChainStatusWithID{
+		ChainStatus: commontypes.ChainStatus{ID: "2", Enabled: true, Config: config2},
+		RelayID:     evm2,
+	}, results[0].Data.(types.ChainStatusWithID))
+
+	assert.Equal(t, types.ChainStatusWithID{
+		ChainStatus: commontypes.ChainStatus{ID: "1", Enabled: true, Config: config1},
+		RelayID:     evm1,
+	}, results[1].Data.(types.ChainStatusWithID))
+	assert.Nil(t, results[2].Data)
+	require.Error(t, results[2].Error)
+	require.ErrorIs(t, results[2].Error, chains.ErrNotFound)
 }
 
 func TestLoader_Nodes(t *testing.T) {
@@ -125,7 +212,7 @@ func TestLoader_FeedsManagers(t *testing.T) {
 		Name: "manager 3",
 	}
 
-	fsvc.On("ListManagersByIDs", []int64{3, 1, 2, 5}).Return([]feeds.FeedsManager{
+	fsvc.On("ListManagersByIDs", mock.Anything, []int64{3, 1, 2, 5}).Return([]feeds.FeedsManager{
 		mgr1, mgr2, mgr3,
 	}, nil)
 	app.On("GetFeedsService").Return(fsvc)
@@ -167,7 +254,7 @@ func TestLoader_JobProposals(t *testing.T) {
 		Status:         feeds.JobProposalStatusRejected,
 	}
 
-	fsvc.On("ListJobProposalsByManagersIDs", []int64{3, 1, 2}).Return([]feeds.JobProposal{
+	fsvc.On("ListJobProposalsByManagersIDs", mock.Anything, []int64{3, 1, 2}).Return([]feeds.JobProposal{
 		jp1, jp3, jp2,
 	}, nil)
 	app.On("GetFeedsService").Return(fsvc)
@@ -194,7 +281,7 @@ func TestLoader_JobRuns(t *testing.T) {
 	run2 := pipeline.Run{ID: int64(2)}
 	run3 := pipeline.Run{ID: int64(3)}
 
-	jobsORM.On("FindPipelineRunsByIDs", []int64{3, 1, 2}).Return([]pipeline.Run{
+	jobsORM.On("FindPipelineRunsByIDs", mock.Anything, []int64{3, 1, 2}).Return([]pipeline.Run{
 		run3, run1, run2,
 	}, nil)
 	app.On("JobORM").Return(jobsORM)
@@ -224,7 +311,7 @@ func TestLoader_JobsByPipelineSpecIDs(t *testing.T) {
 		job2 := job.Job{ID: int32(3), PipelineSpecID: int32(2)}
 		job3 := job.Job{ID: int32(4), PipelineSpecID: int32(3)}
 
-		jobsORM.On("FindJobsByPipelineSpecIDs", []int32{3, 1, 2}).Return([]job.Job{
+		jobsORM.On("FindJobsByPipelineSpecIDs", mock.Anything, []int32{3, 1, 2}).Return([]job.Job{
 			job1, job2, job3,
 		}, nil)
 		app.On("JobORM").Return(jobsORM)
@@ -247,7 +334,7 @@ func TestLoader_JobsByPipelineSpecIDs(t *testing.T) {
 		app := coremocks.NewApplication(t)
 		ctx := InjectDataloader(testutils.Context(t), app)
 
-		jobsORM.On("FindJobsByPipelineSpecIDs", []int32{3, 1, 2}).Return([]job.Job{}, sql.ErrNoRows)
+		jobsORM.On("FindJobsByPipelineSpecIDs", mock.Anything, []int32{3, 1, 2}).Return([]job.Job{}, sql.ErrNoRows)
 		app.On("JobORM").Return(jobsORM)
 
 		batcher := jobBatcher{app}
@@ -274,7 +361,7 @@ func TestLoader_JobsByExternalJobIDs(t *testing.T) {
 		ejID := uuid.New()
 		job := job.Job{ID: int32(2), ExternalJobID: ejID}
 
-		jobsORM.On("FindJobByExternalJobID", ejID).Return(job, nil)
+		jobsORM.On("FindJobByExternalJobID", mock.Anything, ejID).Return(job, nil)
 		app.On("JobORM").Return(jobsORM)
 
 		batcher := jobBatcher{app}
@@ -335,7 +422,7 @@ func TestLoader_SpecErrorsByJobID(t *testing.T) {
 		specErr2 := job.SpecError{ID: int64(3), JobID: int32(2)}
 		specErr3 := job.SpecError{ID: int64(4), JobID: int32(3)}
 
-		jobsORM.On("FindSpecErrorsByJobIDs", []int32{3, 1, 2}, mock.Anything).Return([]job.SpecError{
+		jobsORM.On("FindSpecErrorsByJobIDs", mock.Anything, []int32{3, 1, 2}, mock.Anything).Return([]job.SpecError{
 			specErr1, specErr2, specErr3,
 		}, nil)
 		app.On("JobORM").Return(jobsORM)
@@ -358,7 +445,7 @@ func TestLoader_SpecErrorsByJobID(t *testing.T) {
 		app := coremocks.NewApplication(t)
 		ctx := InjectDataloader(testutils.Context(t), app)
 
-		jobsORM.On("FindSpecErrorsByJobIDs", []int32{3, 1, 2}, mock.Anything).Return([]job.SpecError{}, sql.ErrNoRows)
+		jobsORM.On("FindSpecErrorsByJobIDs", mock.Anything, []int32{3, 1, 2}, mock.Anything).Return([]job.SpecError{}, sql.ErrNoRows)
 		app.On("JobORM").Return(jobsORM)
 
 		batcher := jobSpecErrorsBatcher{app}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/types"
 	coscfg "github.com/smartcontractkit/chainlink-cosmos/pkg/cosmos/config"
 	"github.com/smartcontractkit/chainlink-cosmos/pkg/cosmos/db"
 	"github.com/smartcontractkit/chainlink-cosmos/pkg/cosmos/denom"
@@ -28,7 +29,7 @@ type CosmosTransfersController struct {
 
 // Create sends native coins from the Chainlink's account to a specified address.
 func (tc *CosmosTransfersController) Create(c *gin.Context) {
-	relayers := tc.App.GetRelayers().List(chainlink.FilterRelayersByType(relay.Cosmos))
+	relayers := tc.App.GetRelayers().List(chainlink.FilterRelayersByType(relay.NetworkCosmos))
 	if relayers == nil {
 		jsonAPIError(c, http.StatusBadRequest, ErrSolanaNotEnabled)
 		return
@@ -48,7 +49,7 @@ func (tc *CosmosTransfersController) Create(c *gin.Context) {
 		return
 	}
 
-	relayerID := relay.ID{Network: relay.Cosmos, ChainID: tr.CosmosChainID}
+	relayerID := types.RelayID{Network: relay.NetworkCosmos, ChainID: tr.CosmosChainID}
 	relayer, err := relayers.Get(relayerID)
 	if err != nil {
 		if errors.Is(err, chainlink.ErrNoSuchRelayer) {
@@ -67,7 +68,7 @@ func (tc *CosmosTransfersController) Create(c *gin.Context) {
 	}
 	gasToken = cfgs[i].GasToken()
 
-	//TODO move this inside?
+	// TODO move this inside?
 	coin, err := denom.ConvertDecCoinToDenom(sdk.NewDecCoinFromDec(tr.Token, tr.Amount), gasToken)
 	if err != nil {
 		jsonAPIError(c, http.StatusBadRequest, errors.Errorf("unable to convert %s to %s: %v", tr.Token, gasToken, err))

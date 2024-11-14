@@ -1,10 +1,13 @@
-# 344 warnings
-#./src/v0.8/automation
+# Test files run with a different solhint ruleset, ignore them here.
+./**/*.t.sol
 
 # Ignore frozen Automation code
 ./src/v0.8/automation/v1_2
+./src/v0.8/automation/interfaces/v1_2
 ./src/v0.8/automation/v1_3
+./src/v0.8/automation/interfaces/v1_3
 ./src/v0.8/automation/v2_0
+./src/v0.8/automation/interfaces/v2_0
 ./src/v0.8/automation/v2_1
 ./src/v0.8/automation/interfaces/v2_1/
 ./src/v0.8/automation/interfaces/MigratableKeeperRegistryInterface.sol
@@ -18,6 +21,8 @@
 ./src/v0.8/automation/libraries/internal/Cron.sol
 ./src/v0.8/automation/AutomationForwarder.sol
 ./src/v0.8/automation/AutomationForwarderLogic.sol
+./src/v0.8/automation/interfaces/v2_2/IAutomationRegistryMaster.sol
+./src/v0.8/automation/interfaces/v2_3/IAutomationRegistryMaster2_3.sol
 
 
 # Ignore tests / test helpers (for now)
@@ -27,14 +32,15 @@
 # Ignore Functions v1.0.0 code that was frozen after audit
 ./src/v0.8/functions/v1_0_0
 
-# Ignore tests, this should not be the long term plan but is OK in the short term
-./src/v0.8/**/*.t.sol
-./src/v0.8/mocks
-./src/v0.8/tests
-./src/v0.8/llo-feeds/test
+# Test helpers
 ./src/v0.8/vrf/testhelpers
+./src/v0.8/tests
 ./src/v0.8/functions/tests
+./src/v0.8/mocks/
 
 # Always ignore vendor
 ./src/v0.8/vendor
 ./node_modules/
+
+# Ignore tweaked vendored contracts
+./src/v0.8/shared/enumerable/EnumerableSetWithBytes16.sol

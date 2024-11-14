@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.19;
+pragma solidity 0.8.24;
 
 import {IBurnMintERC20} from "../../../token/ERC20/IBurnMintERC20.sol";
 import {IERC677} from "../../../token/ERC677/IERC677.sol";
@@ -338,7 +338,7 @@ contract BurnMintERC677_increaseApproval is BurnMintERC677Setup {
 }
 
 contract BurnMintERC677_supportsInterface is BurnMintERC677Setup {
-  function testConstructorSuccess() public {
+  function testConstructorSuccess() public view {
     assertTrue(s_burnMintERC677.supportsInterface(type(IERC20).interfaceId));
     assertTrue(s_burnMintERC677.supportsInterface(type(IERC677).interfaceId));
     assertTrue(s_burnMintERC677.supportsInterface(type(IBurnMintERC20).interfaceId));

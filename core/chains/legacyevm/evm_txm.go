@@ -3,20 +3,19 @@ package legacyevm
 import (
 	"fmt"
 
-	"github.com/jmoiron/sqlx"
-
 	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	evmclient "github.com/smartcontractkit/chainlink/v2/core/chains/evm/client"
 	evmconfig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/config"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas/rollups"
+	httypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/headtracker/types"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/logpoller"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
 func newEvmTxm(
-	sqlxDB *sqlx.DB,
-	db sqlutil.DataSource,
+	ds sqlutil.DataSource,
 	cfg evmconfig.EVM,
 	evmRPCEnabled bool,
 	databaseConfig txmgr.DatabaseConfig,
@@ -24,7 +23,9 @@ func newEvmTxm(
 	client evmclient.Client,
 	lggr logger.Logger,
 	logPoller logpoller.LogPoller,
-	opts ChainRelayExtenderConfig,
+	opts ChainRelayOpts,
+	headTracker httypes.HeadTracker,
+	clientsByChainID map[string]rollups.DAClient,
 ) (txm txmgr.TxManager,
 	estimator gas.EvmFeeEstimator,
 	err error,
@@ -46,25 +47,28 @@ func newEvmTxm(
 
 	// build estimator from factory
 	if opts.GenGasEstimator == nil {
-		estimator = gas.NewEstimator(lggr, client, cfg, cfg.GasEstimator())
+		if estimator, err = gas.NewEstimator(lggr, client, cfg.ChainType(), chainID, cfg.GasEstimator(), clientsByChainID); err != nil {
+			return nil, nil, fmt.Errorf("failed to initialize estimator: %w", err)
+		}
 	} else {
 		estimator = opts.GenGasEstimator(chainID)
 	}
 
 	if opts.GenTxManager == nil {
 		txm, err = txmgr.NewTxm(
-			sqlxDB,
-			db,
+			ds,
 			cfg,
 			txmgr.NewEvmTxmFeeConfig(cfg.GasEstimator()),
 			cfg.Transactions(),
+			cfg.NodePool().Errors(),
 			databaseConfig,
 			listenerConfig,
 			client,
 			lggr,
 			logPoller,
 			opts.KeyStore,
-			estimator)
+			estimator,
+			headTracker)
 	} else {
 		txm = opts.GenTxManager(chainID)
 	}

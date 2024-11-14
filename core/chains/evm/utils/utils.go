@@ -54,7 +54,7 @@ func IsEmptyAddress(addr common.Address) bool {
 
 func RandomBytes32() (r [32]byte) {
 	b := make([]byte, 32)
-	_, _ = rand.Read(b[:]) // Assignment for errcheck. Only used in tests so we can ignore.
+	_, _ = rand.Read(b) // Assignment for errcheck. Only used in tests so we can ignore.
 	copy(r[:], b)
 	return
 }
@@ -186,7 +186,6 @@ func NewRedialBackoff() backoff.Backoff {
 		Max:    15 * time.Second,
 		Jitter: true,
 	}
-
 }
 
 // RetryWithBackoff retries the sleeper and backs off if not Done

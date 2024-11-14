@@ -26,7 +26,7 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/keys/cosmoskey"
 )
 
-var nativeToken = "cosm"
+const nativeToken = "cosm"
 
 func TestMain(m *testing.M) {
 
@@ -40,6 +40,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestShell_SendCosmosCoins(t *testing.T) {
+	t.Parallel()
+	ctx := testutils.Context(t)
 	// TODO(BCI-978): cleanup once SetupLocalCosmosNode is updated
 	chainID := cosmostest.RandomChainID()
 	cosmosChain := coscfg.Chain{}
@@ -57,7 +59,7 @@ func TestShell_SendCosmosCoins(t *testing.T) {
 
 	from := accounts[0]
 	to := accounts[1]
-	require.NoError(t, app.GetKeyStore().Cosmos().Add(cosmoskey.Raw(from.PrivateKey.Bytes()).Key()))
+	require.NoError(t, app.GetKeyStore().Cosmos().Add(ctx, cosmoskey.Raw(from.PrivateKey.Bytes()).Key()))
 	chain, err := app.GetRelayers().LegacyCosmosChains().Get(chainID)
 	require.NoError(t, err)
 
@@ -65,7 +67,7 @@ func TestShell_SendCosmosCoins(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		coin, err := reader.Balance(from.Address, *cosmosChain.GasToken)
+		coin, err := reader.Balance(ctx, from.Address, *cosmosChain.GasToken)
 		if !assert.NoError(t, err) {
 			return false
 		}
@@ -88,7 +90,7 @@ func TestShell_SendCosmosCoins(t *testing.T) {
 	} {
 		tt := tt
 		t.Run(tt.amount, func(t *testing.T) {
-			startBal, err := reader.Balance(from.Address, *cosmosChain.GasToken)
+			startBal, err := reader.Balance(ctx, from.Address, *cosmosChain.GasToken)
 			require.NoError(t, err)
 
 			set := flag.NewFlagSet("sendcosmoscoins", 0)
@@ -120,8 +122,8 @@ func TestShell_SendCosmosCoins(t *testing.T) {
 			require.NoError(t, err)
 			expBal := startBal.Sub(sent)
 
-			testutils.AssertEventually(t, func() bool {
-				endBal, err := reader.Balance(from.Address, *cosmosChain.GasToken)
+			testutils.RequireEventually(t, func() bool {
+				endBal, err := reader.Balance(ctx, from.Address, *cosmosChain.GasToken)
 				require.NoError(t, err)
 				t.Logf("%s <= %s", endBal, expBal)
 				return endBal.IsLTE(expBal)

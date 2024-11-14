@@ -10,12 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
-
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/txmgr"
-	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 	ubig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils/big"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/cltest"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
@@ -43,8 +41,9 @@ func TestTransfersController_CreateSuccess_From(t *testing.T) {
 	balance, err := assets.NewEthValueS("200")
 	require.NoError(t, err)
 
-	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
+	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil).Maybe()
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(balance.ToInt(), nil)
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil).Once()
 
 	app := cltest.NewApplicationWithKey(t, ethClient, key)
 	require.NoError(t, app.Start(testutils.Context(t)))
@@ -72,7 +71,7 @@ func TestTransfersController_CreateSuccess_From(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Len(t, errors.Errors, 0)
 
-	validateTxCount(t, app.GetSqlxDB(), 1)
+	validateTxCount(t, app.GetDB(), 1)
 }
 
 func TestTransfersController_CreateSuccess_From_WEI(t *testing.T) {
@@ -85,8 +84,9 @@ func TestTransfersController_CreateSuccess_From_WEI(t *testing.T) {
 	balance, err := assets.NewEthValueS("2")
 	require.NoError(t, err)
 
-	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
+	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil).Maybe()
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(balance.ToInt(), nil)
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil).Once()
 
 	app := cltest.NewApplicationWithKey(t, ethClient, key)
 	require.NoError(t, app.Start(testutils.Context(t)))
@@ -113,7 +113,7 @@ func TestTransfersController_CreateSuccess_From_WEI(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Len(t, errors.Errors, 0)
 
-	validateTxCount(t, app.GetSqlxDB(), 1)
+	validateTxCount(t, app.GetDB(), 1)
 }
 
 func TestTransfersController_CreateSuccess_From_BalanceMonitorDisabled(t *testing.T) {
@@ -126,8 +126,9 @@ func TestTransfersController_CreateSuccess_From_BalanceMonitorDisabled(t *testin
 	balance, err := assets.NewEthValueS("200")
 	require.NoError(t, err)
 
-	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
+	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil).Maybe()
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(balance.ToInt(), nil)
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil).Once()
 
 	config := configtest.NewGeneralConfig(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.EVM[0].BalanceMonitor.Enabled = ptr(false)
@@ -159,7 +160,7 @@ func TestTransfersController_CreateSuccess_From_BalanceMonitorDisabled(t *testin
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Len(t, errors.Errors, 0)
 
-	validateTxCount(t, app.GetSqlxDB(), 1)
+	validateTxCount(t, app.GetDB(), 1)
 }
 
 func TestTransfersController_TransferZeroAddressError(t *testing.T) {
@@ -195,8 +196,9 @@ func TestTransfersController_TransferBalanceToLowError(t *testing.T) {
 
 	ethClient := cltest.NewEthMocksWithTransactionsOnBlocksAssertions(t)
 
-	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
+	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil).Maybe()
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(assets.NewEth(10).ToInt(), nil)
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil).Once()
 
 	app := cltest.NewApplicationWithKey(t, ethClient, key)
 	require.NoError(t, app.Start(testutils.Context(t)))
@@ -233,8 +235,9 @@ func TestTransfersController_TransferBalanceToLowError_ZeroBalance(t *testing.T)
 	balance, err := assets.NewEthValueS("0")
 	require.NoError(t, err)
 
-	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
+	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil).Maybe()
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(balance.ToInt(), nil)
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil).Once()
 
 	app := cltest.NewApplicationWithKey(t, ethClient, key)
 	require.NoError(t, app.Start(testutils.Context(t)))
@@ -269,7 +272,7 @@ func TestTransfersController_JSONBindingError(t *testing.T) {
 
 	client := app.NewHTTPClient(nil)
 
-	resp, cleanup := client.Post("/v2/transfers", bytes.NewBuffer([]byte(`{"address":""}`)))
+	resp, cleanup := client.Post("/v2/transfers", bytes.NewBufferString(`{"address":""}`))
 	t.Cleanup(cleanup)
 
 	cltest.AssertServerResponse(t, resp, http.StatusBadRequest)
@@ -287,7 +290,7 @@ func TestTransfersController_CreateSuccess_eip1559(t *testing.T) {
 
 	ethClient.On("PendingNonceAt", mock.Anything, key.Address).Return(uint64(1), nil)
 	ethClient.On("BalanceAt", mock.Anything, key.Address, (*big.Int)(nil)).Return(balance.ToInt(), nil)
-	ethClient.On("SequenceAt", mock.Anything, mock.Anything, mock.Anything).Return(evmtypes.Nonce(0), nil).Maybe()
+	ethClient.On("NonceAt", mock.Anything, mock.Anything, mock.Anything).Return(uint64(0), nil)
 
 	config := configtest.NewGeneralConfig(t, func(c *chainlink.Config, s *chainlink.Secrets) {
 		c.EVM[0].GasEstimator.EIP1559DynamicFees = ptr(true)
@@ -327,7 +330,7 @@ func TestTransfersController_CreateSuccess_eip1559(t *testing.T) {
 	err = web.ParseJSONAPIResponse(cltest.ParseResponseBody(t, resp), &resource)
 	assert.NoError(t, err)
 
-	validateTxCount(t, app.GetSqlxDB(), 1)
+	validateTxCount(t, app.GetDB(), 1)
 
 	// check returned data
 	assert.NotEmpty(t, resource.Hash)
@@ -398,8 +401,8 @@ func TestTransfersController_FindTxAttempt(t *testing.T) {
 	})
 }
 
-func validateTxCount(t *testing.T, db *sqlx.DB, count int) {
-	txStore := txmgr.NewTxStore(db, logger.TestLogger(t))
+func validateTxCount(t *testing.T, ds sqlutil.DataSource, count int) {
+	txStore := txmgr.NewTxStore(ds, logger.TestLogger(t))
 
 	txes, err := txStore.GetAllTxes(testutils.Context(t))
 	require.NoError(t, err)

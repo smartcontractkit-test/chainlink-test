@@ -15,16 +15,19 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	types2 "github.com/smartcontractkit/chainlink-automation/pkg/v3/types"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/types"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	types3 "github.com/smartcontractkit/chainlink/v2/core/chains/evm/headtracker/types"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/logpoller"
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/logpoller/mocks"
+	evmtypes "github.com/smartcontractkit/chainlink/v2/core/chains/evm/types"
 	ubig "github.com/smartcontractkit/chainlink/v2/core/chains/evm/utils/big"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated"
 	ac "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/automation_compatible_utils"
 	autov2common "github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/i_automation_v21_plus_common"
-	"github.com/smartcontractkit/chainlink/v2/core/logger"
+	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/core"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/encoding"
 	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21/logprovider"
@@ -185,6 +188,7 @@ func TestPollLogs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
+			ctx := testutils.Context(t)
 			mp := new(mocks.LogPoller)
 
 			if test.LatestBlock != nil {
@@ -204,7 +208,7 @@ func TestPollLogs(t *testing.T) {
 				chLog:         make(chan logpoller.Log, 10),
 			}
 
-			err := rg.pollUpkeepStateLogs()
+			err := rg.pollUpkeepStateLogs(ctx)
 
 			assert.Equal(t, test.ExpectedLastPoll, rg.lastPollBlock)
 			if test.ExpectedErr != nil {
@@ -264,7 +268,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					if eventSig == (autov2common.IAutomationV21PlusCommonUpkeepUnpaused{}.Topic()) {
 						return nil, errors.New("indexed logs boom")
 					}
@@ -289,7 +293,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					if eventSig == (autov2common.IAutomationV21PlusCommonUpkeepTriggerConfigSet{}.Topic()) {
 						return nil, errors.New("indexed logs boom")
 					}
@@ -314,7 +318,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					return []logpoller.Log{
 						{},
 					}, nil
@@ -346,7 +350,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					return []logpoller.Log{
 						{
 							BlockNumber: 1,
@@ -400,7 +404,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					return []logpoller.Log{
 						{
 							BlockNumber: 2,
@@ -452,7 +456,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					return []logpoller.Log{
 						{
 							BlockNumber: 2,
@@ -506,7 +510,7 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				},
 			},
 			poller: &mockLogPoller{
-				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs logpoller.Confirmations) ([]logpoller.Log, error) {
+				IndexedLogsFn: func(ctx context.Context, eventSig common.Hash, address common.Address, topicIndex int, topicValues []common.Hash, confs evmtypes.Confirmations) ([]logpoller.Log, error) {
 					return []logpoller.Log{
 						{
 							BlockNumber: 2,
@@ -541,7 +545,8 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			lggr := logger.TestLogger(t)
+			ctx := tests.Context(t)
+			lggr := logger.Test(t)
 			var hb types3.HeadBroadcaster
 			var lp logpoller.LogPoller
 
@@ -555,10 +560,10 @@ func TestRegistry_refreshLogTriggerUpkeeps(t *testing.T) {
 				bs:               bs,
 				registry:         tc.registry,
 				packer:           tc.packer,
-				lggr:             lggr,
+				lggr:             logger.Sugared(lggr),
 			}
 
-			err := registry.refreshLogTriggerUpkeeps(tc.ids)
+			err := registry.refreshLogTriggerUpkeeps(ctx, tc.ids)
 			if tc.expectsErr {
 				assert.Error(t, err)
 				assert.Equal(t, err.Error(), tc.wantErr.Error())

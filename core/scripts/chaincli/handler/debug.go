@@ -24,6 +24,8 @@ import (
 
 	ocr2keepers "github.com/smartcontractkit/chainlink-common/pkg/types/automation"
 
+	"github.com/smartcontractkit/chainlink/v2/core/cbor"
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/assets"
 	evm21 "github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/ocr2keeper/evmregistry/v21"
 
 	commonhex "github.com/smartcontractkit/chainlink-common/pkg/utils/hex"
@@ -43,8 +45,13 @@ import (
 const (
 	ConditionTrigger uint8 = iota
 	LogTrigger
-	expectedTypeAndVersion = "KeeperRegistry 2.1.0"
+	expectedVersion21 = "KeeperRegistry 2.1.0"
+	expectedVersion23 = "AutomationRegistry 2.3.0"
 )
+
+type UpkeepOffchainConfig struct {
+	MaxGasPrice *big.Int `json:"maxGasPrice" cbor:"maxGasPrice"`
+}
 
 var mercuryPacker = mercury.NewAbiPacker()
 var packer = encoding.NewAbiPacker()
@@ -85,8 +92,8 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 	if err != nil {
 		failCheckConfig("failed to get typeAndVersion: make sure your registry contract address and archive node are valid", err)
 	}
-	if typeAndVersion != expectedTypeAndVersion {
-		failCheckConfig(fmt.Sprintf("invalid registry contract: this command can only debug %s, got: %s", expectedTypeAndVersion, typeAndVersion), nil)
+	if typeAndVersion != expectedVersion21 && typeAndVersion != expectedVersion23 {
+		failCheckConfig(fmt.Sprintf("invalid registry contract: this command can only debug %s or %s, got: %s", expectedVersion21, expectedVersion23, typeAndVersion), nil)
 	}
 	// get upkeepID from command args
 	upkeepID := big.NewInt(0)
@@ -133,6 +140,10 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 
 		// do basic checks
 		upkeepInfo = getUpkeepInfoAndRunBasicChecks(v2common, triggerCallOpts, upkeepID, chainID)
+
+		cgp, mgp := getGasPrice(ctx, k, upkeepInfo)
+		log.Printf("CURRENT gas price (you cannot call eth_gasPrice on any non latest block) is %s, this upkeep's MAX gas price is %s\n", cgp, mgp)
+		log.Printf("If upkeep's max gas price (if configured) is lower than the gas price when this upkeep was previously checked, the simulation will fail and this upkeep won't be performed.\n")
 
 		var tmpCheckResult autov2common.CheckUpkeep0
 		tmpCheckResult, err = v2common.CheckUpkeep0(triggerCallOpts, upkeepID)
@@ -208,6 +219,10 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 		// do basic checks
 		upkeepInfo = getUpkeepInfoAndRunBasicChecks(v2common, triggerCallOpts, upkeepID, chainID)
 
+		cgp, mgp := getGasPrice(ctx, k, upkeepInfo)
+		log.Printf("CURRENT gas price (you cannot call eth_gasPrice on any non latest block) is %s, this upkeep's MAX gas price is %s\n", cgp, mgp)
+		log.Printf("If upkeep's max gas price (if configured) is lower than the gas price when this upkeep was previously checked, the simulation will fail and this upkeep won't be performed.\n")
+
 		var rawTriggerConfig []byte
 		rawTriggerConfig, err = v2common.GetUpkeepTriggerConfig(triggerCallOpts, upkeepID)
 		if err != nil {
@@ -270,6 +285,9 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 			message("upkeep reverted with StreamsLookup")
 			message(fmt.Sprintf("StreamsLookup data: {FeedParamKey: %s, Feeds: %v, TimeParamKey: %s, Time: %d, ExtraData: %s}", streamsLookupErr.FeedParamKey, streamsLookupErr.Feeds, streamsLookupErr.TimeParamKey, streamsLookupErr.Time.Uint64(), hexutil.Encode(streamsLookupErr.ExtraData)))
 
+			if blockNum == 0 {
+				failCheckConfig("Data streams requires a valid block number for conditional upkeeps, append a block number to your command", nil)
+			}
 			streamsLookup := &mercury.StreamsLookup{
 				StreamsLookupError: &mercury.StreamsLookupError{
 					FeedParamKey: streamsLookupErr.FeedParamKey,
@@ -293,6 +311,9 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 				if !allowed {
 					resolveIneligible("upkeep reverted with StreamsLookup but is not allowed to access streams")
 				}
+				if k.cfg.DataStreamsLegacyURL == "" {
+					failCheckConfig("Data streams v02 requires Legacy URL, check your DATA_STREAMS settings in .env", nil)
+				}
 			} else if streamsLookup.IsMercuryV03() {
 				// handle v0.3
 				message("using data streams lookup v0.3")
@@ -300,7 +321,7 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 				resolveIneligible("upkeep reverted with StreamsLookup but the configuration is invalid")
 			}
 
-			if k.cfg.DataStreamsLegacyURL == "" || k.cfg.DataStreamsURL == "" || k.cfg.DataStreamsID == "" || k.cfg.DataStreamsKey == "" {
+			if k.cfg.DataStreamsURL == "" || k.cfg.DataStreamsID == "" || k.cfg.DataStreamsKey == "" {
 				failCheckConfig("Data streams configs not set properly for this network, check your DATA_STREAMS settings in .env", nil)
 			}
 
@@ -378,6 +399,36 @@ func (k *Keeper) Debug(ctx context.Context, args []string) {
 			resolveIneligible("simulate perform upkeep unsuccessful")
 		}
 	}
+}
+
+func getGasPrice(ctx context.Context, k *Keeper, upkeepInfo autov2common.IAutomationV21PlusCommonUpkeepInfoLegacy) (*assets.Wei, *assets.Wei) {
+	var cgp *assets.Wei
+	var err error
+	var gp *big.Int
+	// get gas price, eth_gasPrice does not take arguments, so we cannot access gas price at an older block
+	gp, err = k.client.SuggestGasPrice(ctx)
+	if err != nil {
+		log.Printf("⚠️ failed to get current gas price due to %v", err)
+	} else {
+		cgp = assets.NewWei(gp)
+		log.Printf("current gas price is %s", cgp)
+	}
+
+	var mgp *assets.Wei
+	// check if max gas price is configured
+	if len(upkeepInfo.OffchainConfig) != 0 {
+		var offchainConfig UpkeepOffchainConfig
+		err := cbor.ParseDietCBORToStruct(upkeepInfo.OffchainConfig, &offchainConfig)
+		if err != nil {
+			log.Printf("failed to parse offchain config bytes to max gas price\n")
+		} else {
+			mgp = assets.NewWei(offchainConfig.MaxGasPrice)
+		}
+	} else {
+		log.Printf("offchain config is not configured for this upkeep\n")
+	}
+
+	return cgp, mgp
 }
 
 func getUpkeepInfoAndRunBasicChecks(keeperRegistry21 *autov2common.IAutomationV21PlusCommon, callOpts *bind.CallOpts, upkeepID *big.Int, chainID int64) autov2common.IAutomationV21PlusCommonUpkeepInfoLegacy {
