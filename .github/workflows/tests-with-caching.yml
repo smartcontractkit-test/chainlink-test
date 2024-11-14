@@ -5,16 +5,21 @@ on:
   push:
     branches:
       - develop
+      - main
       - "release/*"
   merge_group:
   pull_request:
 
 jobs:
 
-  update-test-binary-hashs:
-    if: ${{ github.ref == 'refs/heads/develop' }}
-    runs-on: ubuntu22.04-32cores-128GB
+  update-test-binary-hashes:
     name: Update Test Binaries Hashes
+    runs-on: ubuntu-latest
+    # runs-on: ubuntu22.04-32cores-128GB
+    if: ${{ github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' }}
+    concurrency:
+      group: update-test-binary-hashes-${{ github.ref }}
+      cancel-in-progress: false
     env:
       # We explicitly have this env var not be "CL_DATABASE_URL" to avoid having it be used by core related tests
       # when they should not be using it, while still allowing us to DRY up the setup
@@ -27,19 +32,19 @@ jobs:
         shell: bash
         run: |
           find . -type f,d -exec touch -r {} -d '1970-01-01T00:00:01' {} \; || true
-      
+
       - name: Setup Go
         uses: ./.github/actions/setup-go
         with:
           restore-build-cache-only: true
           # piggy back on go_core_tests for caching
           build-cache-version: 'go_core_tests'
-      
+
       - name: Build Test Binaries
         shell: bash
         env:
           CL_DATABASE_URL: ${{ env.DB_URL }}
-          BUILD_CONCURRENCY: "32"
+          BUILD_CONCURRENCY: "4"
         run: |
           ./tools/bin/build-test-binaries-with-concurrency
 
@@ -47,12 +52,63 @@ jobs:
         shell: bash
         working-directory: './testsout'
         run: |
-          echo "{" > test_hashes.json
+          echo "{" > test-hashes.json
           for file in $(find * -type f -name '*-test'); do
             hash=$(sha256sum "$file" | cut -d ' ' -f1)
-            echo "\"$file\": \"$hash\"," >> test_hashes.json
+            echo "\"$file\": \"$hash\"," >> test-hashes.json
           done
-          echo "}" >> test_hashes.json
-          echo test-binaries-file="./testsout/test_hashes.json" >> $GITHUB_OUTPUT
-          echo test-binaries-json=$(cat test_hashes.json) >> $GITHUB_OUTPUT
+          echo "}" >> test-hashes.json
+          cat test-hashes.json
+          echo test-binaries-file="./testsout/test-hashes.json" >> $GITHUB_OUTPUT
+          echo test-binaries-json=$(cat test-hashes.json) >> $GITHUB_OUTPUT
+
+      - name: Push test-hashes.json to test-hashes branch via GitHub GraphQL API
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Variables
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+          BRANCH_NAME="test-hashes"
+          FILE_PATH="test-hashes.json"
+          COMMIT_MESSAGE="Update test-hashes.json"
+          COMMIT_BODY="Updating for commit ${{ github.sha }}"
+          NEW_CONTENT=$(base64 ./testsout/test-hashes.json | tr -d '\n')
+
+          # 1. Get the latest commit SHA (OID) of the test-hashes branch
+          LAST_COMMIT_OID=$(curl -s -X POST -H "Authorization: bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { repository(owner: \"'$REPO_OWNER'\", name: \"'$REPO_NAME'\") { ref(qualifiedName: \"refs/heads/'$BRANCH_NAME'\") { target { ... on Commit { oid } } } } }"}' \
+            https://api.github.com/graphql | jq -r '.data.repository.ref.target.oid')
+
+          # 2. Create a new commit on the test-hashes branch with the updated file content
+          curl -s -X POST -H "Authorization: bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+                  "query": "mutation ($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url } } }",
+                  "variables": {
+                    "input": {
+                      "branch": {
+                        "repositoryNameWithOwner": "'"$REPO_OWNER/$REPO_NAME"'",
+                        "branchName": "'"$BRANCH_NAME"'"
+                      },
+                      "message": {
+                        "headline": "'"$COMMIT_MESSAGE"'",
+                        "body": "'"$COMMIT_BODY"'"
+                      },
+                      "fileChanges": {
+                        "additions": [
+                          {
+                            "path": "'"$FILE_PATH"'",
+                            "contents": "'"$NEW_CONTENT"'"
+                          }
+                        ]
+                      },
+                      "expectedHeadOid": "'"$LAST_COMMIT_OID"'"
+                    }
+                  }
+                }' https://api.github.com/graphql | jq -r '.data.createCommitOnBranch.commit.url'
+
+          echo "test-hashes.json has been updated on the $BRANCH_NAME branch."
+
 
