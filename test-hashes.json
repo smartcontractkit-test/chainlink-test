@@ -6,5 +6,5 @@
 "github.com-smartcontractkit-chainlink-v2-core-services-gateway-handlers-common-test": "027718415743ea4aa5ff7adfafe077421ad72cf072bf09eb8421e34eae97a2d4",
 "github.com-smartcontractkit-chainlink-v2-core-services-ocr2-plugins-ccip-internal-ccipcommon-test": "2fb0a165521215ab2dfbeda82ff0be4a638b8d2062845bd2ea5d5dc5b08df24e",
 "github.com-smartcontractkit-chainlink-v2-core-services-ocrcommon-test": "43fe23c3efcbc88932565a3c321abe7137cd7c92478656335255c4289127617c",
-"github.com-smartcontractkit-chainlink-v2-core-services-vrf-vrfcommon-test": "3deb69a9f5bbf9909d70535256ecbdd2733477e9b3faa59c3dd0b19da0bb3ba0",
+"github.com-smartcontractkit-chainlink-v2-core-services-vrf-vrfcommon-test": "3deb69a9f5bbf9909d70535256ecbdd2733477e9b3faa59c3dd0b19da0bb3ba0"
 }
