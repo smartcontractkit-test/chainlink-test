@@ -1,0 +1,11 @@
+name: Debug Test
+
+on:
+  pull_request:
+
+jobs:
+  print-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print Environment Variables
+        run: env
