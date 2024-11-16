@@ -15,10 +15,8 @@ jobs:
   update-test-binary-hashes:
     name: Update Test Binaries Hashes
     runs-on: ubuntu-latest
-    # runs-on: ubuntu22.04-32cores-128GB
-    # Skip for now
-    # if: ${{ github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' }}
-    if: ${{ github.ref == 'refs/heads/does-not-exist' }}
+    if: ${{ github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' }}
+    # if: ${{ github.ref == 'refs/heads/does-not-exist' }}
     concurrency:
       group: update-test-binary-hashes-${{ github.ref }}
       cancel-in-progress: false
@@ -114,7 +112,7 @@ jobs:
           echo "test-hashes.json has been updated on the $BRANCH_NAME branch."
 
 
-  compare-test-binary-hashes:
+  run-test-binaries:
     name: Compare Test Binary Hashes
     needs: update-test-binary-hashes
     if: ${{ always() }}
@@ -136,71 +134,53 @@ jobs:
         uses: ./.github/actions/setup-go
         with:
           restore-build-cache-only: true
-          # piggy back on go_core_tests for caching
-          build-cache-version: 'go_core_tests'
 
-      - name: Build Test Binaries
-        shell: bash
+      - name: Setup Solana
+        uses: ./.github/actions/setup-solana
+
+      - name: Setup wasmd
+        uses: ./.github/actions/setup-wasmd
+
+      - name: Setup Postgres
+        uses: ./.github/actions/setup-postgres
+
+      - name: Touching core/web/assets/index.html
+        run: mkdir -p core/web/assets && touch core/web/assets/index.html
+
+      - name: Download Go vendor packages
+        run: go mod download
+
+      - name: Build binary
+        run: go build -o chainlink.test .
+
+      - name: Setup DB
+        run: ./chainlink.test local db preparetest
         env:
           CL_DATABASE_URL: ${{ env.DB_URL }}
-          BUILD_CONCURRENCY: "4"
+
+      - name: Install LOOP Plugins
         run: |
-          ./tools/bin/build-test-binaries-with-concurrency
+          pushd $(go list -m -f "{{.Dir}}" github.com/smartcontractkit/chainlink-feeds)
+          go install ./cmd/chainlink-feeds
+          popd
+          pushd $(go list -m -f "{{.Dir}}" github.com/smartcontractkit/chainlink-data-streams)
+          go install ./mercury/cmd/chainlink-mercury
+          popd
+          pushd $(go list -m -f "{{.Dir}}" github.com/smartcontractkit/chainlink-solana)
+          go install ./pkg/solana/cmd/chainlink-solana
+          popd
+          pushd $(go list -m -f "{{.Dir}}" github.com/smartcontractkit/chainlink-starknet/relayer)
+          go install ./pkg/chainlink/cmd/chainlink-starknet
+          popd
 
-      - name: Hash Test Binaries
-        shell: bash
-        working-directory: './testsout'
-        run: |
-          echo "{" > test-hashes.json
+      - name: Install gotestloghelper
+        run: go install github.com/smartcontractkit/chainlink-testing-framework/tools/gotestloghelper@v1.50.0
 
-          entries=()
-          for file in $(find * -type f -name '*-test'); do
-            hash=$(sha256sum "$file" | cut -d ' ' -f1)
-            # Add each entry as a JSON-formatted string to the array
-            entries+=("\"$file\": \"$hash\"")
-          done
-
-          # Join the entries with a comma and add them to the JSON file
-          IFS=, ; echo "${entries[*]}" >> test-hashes.json
-          echo "}" >> test-hashes.json
-
-          cat test-hashes.json
-
-      - name: Retrieve test-hashes.json from test-hashes branch
+      - name: Run tests
+        uses: smartcontractkit/.github/apps/go-test-caching@feat/go-test-binary-comparison
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            -o previous-test-hashes.json \
-            "https://api.github.com/repos/${{ github.repository }}/contents/test-hashes.json?ref=test-hashes"
-
-          cat previous-test-hashes.json
-
-      - name: Compare hashes to find differences using GitHub Script
-        id: compare-hashes
-        uses: actions/github-script@v7.0.1
+          CL_DATABASE_URL: ${{ env.DB_URL }}
         with:
-          script: |
-            const fs = require('fs');
-
-            const previousHashes = JSON.parse(fs.readFileSync('previous-test-hashes.json', 'utf8'));
-            const currentHashes = JSON.parse(fs.readFileSync('./testsout/test-hashes.json', 'utf8'));
-
-            // Find files with different hashes
-            const changedPackages = [];
-            for (const [file, currentHash] of Object.entries(currentHashes)) {
-              const previousHash = previousHashes[file];
-              if (previousHash !== currentHash) {
-                changedPackages.push(file);
-              }
-            }
-
-            // Set the output as a JSON string
-            core.setOutput('changed-packages', JSON.stringify(changedPackages));
-
-      - name: Output changed files
-        run: |
-          echo "Changed files: ${{ steps.compare-hashes.outputs.changed-packages }}"
-
-
+          build-concurrency: "4"
+          run-concurrency: "4"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
